@@ -37,6 +37,11 @@ import {
 } from '../../services/navigation'
 import { useInterfaceStore } from '../../stores/interfaceStore'
 import type { FavoriteShortcut } from '../../stores/interfaceStore'
+import { getTrafficFlow, TRAFFIC_MIN_ZOOM, TRAFFIC_REFRESH_MS } from '../../services/traffic'
+
+const TRAFFIC_SOURCE_ID = 'here-traffic'
+const TRAFFIC_LAYER_ID = 'here-traffic-line'
+const TRAFFIC_STORAGE_KEY = 'gps:traffic-enabled'
 
 type MapStatus = 'loading' | 'ready' | 'error'
 type RouteReportType = 'traffic' | 'police' | 'obstacle' | 'danger'
@@ -58,6 +63,15 @@ export function MapCanvas() {
   const currentPositionMarkerRef = useRef<MapLibreMarker | null>(null)
   const routeReportMarkerRefs = useRef(new Map<string, MapLibreMarker>())
   const [status, setStatus] = useState<MapStatus>('loading')
+  const [trafficEnabled, setTrafficEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem(TRAFFIC_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const [trafficStatus, setTrafficStatus] = useState<'idle' | 'loading' | 'ready' | 'zoom' | 'error'>('idle')
+  const trafficButtonRef = useRef<HTMLButtonElement | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [attempt, setAttempt] = useState(0)
   const [mapViewportMobile, setMapViewportMobile] = useState(false)
@@ -164,6 +178,29 @@ export function MapCanvas() {
         }
 
         instance.addControl(new NavigationControl({ showCompass: true, showZoom: true }), 'top-right')
+        instance.addControl(
+          {
+            onAdd: () => {
+              const container = document.createElement('div')
+              container.className = 'maplibregl-ctrl maplibregl-ctrl-group'
+              const button = document.createElement('button')
+              button.type = 'button'
+              button.className = 'map-traffic-toggle'
+              button.title = 'Trafic en temps réel'
+              button.setAttribute('aria-label', 'Afficher le trafic en temps réel')
+              button.innerHTML =
+                '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="7" r="1.8" fill="#d93025"/><circle cx="12" cy="12" r="1.8" fill="#f29900"/><circle cx="12" cy="17" r="1.8" fill="#1e8e3e"/></svg>'
+              button.addEventListener('click', () => setTrafficEnabled((enabled) => !enabled))
+              trafficButtonRef.current = button
+              container.append(button)
+              return container
+            },
+            onRemove: () => {
+              trafficButtonRef.current = null
+            },
+          },
+          'top-right',
+        )
         instance.addControl(new ScaleControl({ maxWidth: 100, unit: 'metric' }), 'bottom-left')
         const controlLabels = [
           ['.maplibregl-ctrl-zoom-in', 'Zoom avant'],
@@ -349,6 +386,134 @@ export function MapCanvas() {
       favoriteMarkerRefs.current.clear()
     }
   }, [favorites, status])
+
+  // Trafic HERE : bouton, préférence mémorisée, couche colorée selon l'embouteillage.
+  useEffect(() => {
+    const button = trafficButtonRef.current
+    if (button) {
+      button.setAttribute('aria-pressed', String(trafficEnabled))
+      button.classList.toggle('is-active', trafficEnabled)
+    }
+    try {
+      window.localStorage.setItem(TRAFFIC_STORAGE_KEY, trafficEnabled ? '1' : '0')
+    } catch {
+      // Stockage indisponible (navigation privée) : la préférence n'est simplement pas mémorisée.
+    }
+  }, [trafficEnabled, status])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map) return
+
+    const removeTrafficLayer = () => {
+      if (map.getLayer(TRAFFIC_LAYER_ID)) map.removeLayer(TRAFFIC_LAYER_ID)
+      if (map.getSource(TRAFFIC_SOURCE_ID)) map.removeSource(TRAFFIC_SOURCE_ID)
+    }
+    if (!trafficEnabled) {
+      removeTrafficLayer()
+      setTrafficStatus('idle')
+      return
+    }
+
+    let controller: AbortController | null = null
+    let debounce: number | undefined
+    // Zone déjà chargée : tant que l'écran reste dedans, pas de nouvelle requête.
+    let loaded: { west: number; south: number; east: number; north: number; detailed: boolean; time: number } | null = null
+
+    const refresh = (force: boolean) => {
+      const zoom = map.getZoom()
+      if (zoom < TRAFFIC_MIN_ZOOM) {
+        if (map.getLayer(TRAFFIC_LAYER_ID)) map.setLayoutProperty(TRAFFIC_LAYER_ID, 'visibility', 'none')
+        setTrafficStatus('zoom')
+        return
+      }
+      if (map.getLayer(TRAFFIC_LAYER_ID)) map.setLayoutProperty(TRAFFIC_LAYER_ID, 'visibility', 'visible')
+
+      const view = map.getBounds()
+      const detailed = zoom >= 13
+      const stillCovered =
+        loaded &&
+        loaded.detailed === detailed &&
+        Date.now() - loaded.time < TRAFFIC_REFRESH_MS &&
+        view.getWest() >= loaded.west &&
+        view.getEast() <= loaded.east &&
+        view.getSouth() >= loaded.south &&
+        view.getNorth() <= loaded.north
+      if (!force && stillCovered) {
+        setTrafficStatus('ready')
+        return
+      }
+
+      // On charge 50 % de marge autour de l'écran pour absorber les déplacements.
+      const padLng = (view.getEast() - view.getWest()) * 0.5
+      const padLat = (view.getNorth() - view.getSouth()) * 0.5
+      const area = {
+        west: view.getWest() - padLng,
+        south: view.getSouth() - padLat,
+        east: view.getEast() + padLng,
+        north: view.getNorth() + padLat,
+      }
+
+      controller?.abort()
+      const request = new AbortController()
+      controller = request
+      setTrafficStatus((current) => (current === 'ready' ? current : 'loading'))
+      void getTrafficFlow(area, zoom, request.signal)
+        .then((data) => {
+          if (request.signal.aborted || mapRef.current !== map) return
+          loaded = { ...area, detailed, time: Date.now() }
+          const source = map.getSource(TRAFFIC_SOURCE_ID)
+          if (source && 'setData' in source && typeof source.setData === 'function') {
+            source.setData(data)
+          } else if (!source) {
+            map.addSource(TRAFFIC_SOURCE_ID, { type: 'geojson', data })
+          }
+          if (!map.getLayer(TRAFFIC_LAYER_ID)) {
+            const firstSymbolLayer = map.getStyle().layers?.find((layer) => layer.type === 'symbol')?.id
+            map.addLayer(
+              {
+                id: TRAFFIC_LAYER_ID,
+                type: 'line',
+                source: TRAFFIC_SOURCE_ID,
+                layout: { 'line-cap': 'round', 'line-join': 'round' },
+                paint: {
+                  // jamFactor HERE : 0 = fluide … 10 = route fermée.
+                  'line-color': [
+                    'step', ['get', 'jamFactor'],
+                    '#1e8e3e',
+                    4, '#f29900',
+                    8, '#d93025',
+                    10, '#7f1d1d',
+                  ],
+                  'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 15, 4, 18, 7],
+                  'line-opacity': 0.85,
+                },
+              },
+              firstSymbolLayer,
+            )
+          }
+          setTrafficStatus('ready')
+        })
+        .catch(() => {
+          if (!request.signal.aborted) setTrafficStatus('error')
+        })
+    }
+
+    const handleMoveEnd = () => {
+      window.clearTimeout(debounce)
+      debounce = window.setTimeout(() => refresh(false), 600)
+    }
+    map.on('moveend', handleMoveEnd)
+    const interval = window.setInterval(() => refresh(true), TRAFFIC_REFRESH_MS)
+    refresh(true)
+
+    return () => {
+      map.off('moveend', handleMoveEnd)
+      window.clearTimeout(debounce)
+      window.clearInterval(interval)
+      controller?.abort()
+    }
+  }, [trafficEnabled, status])
 
   // Nouveau trajet : on repart de zéro.
   useEffect(() => {
@@ -779,6 +944,13 @@ export function MapCanvas() {
       aria-label={navigationActive ? 'Carte de navigation en perspective' : 'Carte interactive'}
     >
       <div className="map-host" ref={mapContainerRef} />
+      {trafficEnabled && (trafficStatus === 'loading' || trafficStatus === 'zoom' || trafficStatus === 'error') && (
+        <div className={`map-traffic-status ${trafficStatus === 'error' ? 'is-error' : ''}`} role="status" aria-live="polite">
+          {trafficStatus === 'loading' && 'Chargement du trafic…'}
+          {trafficStatus === 'zoom' && 'Zoomez pour voir le trafic'}
+          {trafficStatus === 'error' && 'Trafic indisponible'}
+        </div>
+      )}
       {route && routeControlsStatus !== 'idle' && (
         <div className="route-controls-legend" role="status" aria-live="polite">
           {routeControlsStatus === 'loading' && upcomingControls.length === 0 ? (
