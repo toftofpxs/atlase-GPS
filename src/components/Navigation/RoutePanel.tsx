@@ -1,4 +1,11 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowDown,
@@ -48,6 +55,9 @@ const recentSectionContent = {
 }
 
 export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
+  const [mobilePanelCollapsed, setMobilePanelCollapsed] = useState(false)
+  const handlePointerStart = useRef<number | null>(null)
+  const ignoreHandleClick = useRef(false)
   const [locating, setLocating] = useState(false)
   const [locationError, setLocationError] = useState('')
   const [locationDialogOpen, setLocationDialogOpen] = useState(false)
@@ -88,6 +98,40 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const setTollPreference = useInterfaceStore((state) => state.setTollPreference)
   const selectRouteOption = useInterfaceStore((state) => state.selectRouteOption)
   const selectSection = useInterfaceStore((state) => state.selectSection)
+  useEffect(() => {
+    if (section !== 'route' || settingsOpen || navigationActive) {
+      setMobilePanelCollapsed(false)
+    }
+  }, [navigationActive, section, settingsOpen])
+
+  const handleSheetPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    handlePointerStart.current = event.clientY
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handleSheetPointerUp = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const startY = handlePointerStart.current
+    handlePointerStart.current = null
+    if (startY === null) return
+
+    const distance = event.clientY - startY
+    if (Math.abs(distance) < 36) return
+
+    ignoreHandleClick.current = true
+    window.setTimeout(() => {
+      ignoreHandleClick.current = false
+    }, 0)
+    setMobilePanelCollapsed(distance > 0)
+  }
+
+  const handleSheetClick = () => {
+    if (ignoreHandleClick.current) {
+      ignoreHandleClick.current = false
+      return
+    }
+    setMobilePanelCollapsed((collapsed) => !collapsed)
+  }
+
   const isDestinationFavorite = destination
     ? favorites.some((favorite) => favorite.id === destination.id)
     : false
@@ -294,7 +338,24 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   }
 
   return (
-    <section className={`side-panel route-panel ${navigationActive ? 'route-panel-navigation' : ''}`} aria-labelledby="panel-title">
+    <section
+      className={`side-panel route-panel ${navigationActive ? 'route-panel-navigation' : ''} ${mobilePanelCollapsed ? 'side-panel-mobile-collapsed' : ''}`}
+      aria-labelledby="panel-title"
+    >
+      <button
+        className="sheet-handle"
+        type="button"
+        aria-label={mobilePanelCollapsed ? 'Afficher le panneau du trajet' : 'Réduire le panneau du trajet'}
+        aria-expanded={!mobilePanelCollapsed}
+        onPointerDown={handleSheetPointerDown}
+        onPointerUp={handleSheetPointerUp}
+        onPointerCancel={() => {
+          handlePointerStart.current = null
+        }}
+        onClick={handleSheetClick}
+      >
+        <span className="sheet-handle-indicator" aria-hidden="true" />
+      </button>
       <PanelHeading eyebrow="Votre prochain voyage" title="Planifier un trajet" />
       <div className="route-inputs">
         <div className="route-line" aria-hidden="true">
