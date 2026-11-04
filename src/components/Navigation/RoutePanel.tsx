@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ArrowDown,
   Bookmark,
@@ -50,6 +51,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const [locating, setLocating] = useState(false)
   const [locationError, setLocationError] = useState('')
   const [locationDialogOpen, setLocationDialogOpen] = useState(false)
+  const [locationDialogClosing, setLocationDialogClosing] = useState(false)
   const [departureDate, setDepartureDate] = useState(getCurrentDateValue)
   const [departureTime, setDepartureTime] = useState(getCurrentTimeValue)
   const origin = useInterfaceStore((state) => state.origin)
@@ -127,7 +129,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   }, [navigationActive, route, setCurrentPosition, setNavigationError, setNavigationStepIndex, stopNavigation])
 
   const handleUseCurrentLocation = async () => {
-    setLocationDialogOpen(false)
+    setLocationDialogClosing(true)
     setLocationError('')
     setLocating(true)
     try {
@@ -137,6 +139,16 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     } finally {
       setLocating(false)
     }
+  }
+
+  const openLocationDialog = () => {
+    setLocationDialogClosing(false)
+    setLocationDialogOpen(true)
+  }
+
+  const finishClosingLocationDialog = () => {
+    setLocationDialogOpen(false)
+    setLocationDialogClosing(false)
   }
 
   const handleCalculateRoute = async (preference = tollPreference) => {
@@ -368,7 +380,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
         <button
           type="button"
           className="location-button"
-          onClick={() => setLocationDialogOpen(true)}
+          onClick={openLocationDialog}
           disabled={locating}
         >
           {locating ? <LoaderCircle size={14} className="route-button-spinner" /> : <LocateFixed size={14} />}
@@ -388,8 +400,21 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
         )}
       </div>
       {locationError && <p className="location-error" role="alert">{locationError}</p>}
-      {locationDialogOpen && (
-        <div className="location-dialog-backdrop" onClick={() => setLocationDialogOpen(false)}>
+      {locationDialogOpen && createPortal(
+        <div
+          className={`location-dialog-backdrop${locationDialogClosing ? ' location-dialog-closing' : ''}`}
+          onClick={event => {
+            if (event.target === event.currentTarget) setLocationDialogClosing(true)
+          }}
+          onAnimationEnd={event => {
+            if (
+              event.target === event.currentTarget &&
+              event.animationName === 'location-dialog-exit'
+            ) {
+              finishClosingLocationDialog()
+            }
+          }}
+        >
           <section
             className="location-dialog"
             role="dialog"
@@ -404,7 +429,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
               Votre position sert à définir le départ et à vous guider pendant le trajet. Vous pourrez autoriser l’accès dans la fenêtre du navigateur.
             </p>
             <div className="location-dialog-actions">
-              <button type="button" className="location-dialog-cancel" onClick={() => setLocationDialogOpen(false)}>
+              <button type="button" className="location-dialog-cancel" onClick={() => setLocationDialogClosing(true)}>
                 Plus tard
               </button>
               <button type="button" className="location-dialog-confirm" onClick={handleUseCurrentLocation}>
@@ -412,7 +437,8 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
               </button>
             </div>
           </section>
-        </div>
+        </div>,
+        document.body,
       )}
 
       <div className="departure-schedule">
