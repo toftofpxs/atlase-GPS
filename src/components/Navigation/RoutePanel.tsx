@@ -36,7 +36,17 @@ import {
   X,
 } from 'lucide-react'
 import { getCurrentLocation, getLocationErrorMessage, watchCurrentLocation } from '../../services/location'
-import { getNavigationGuidance } from '../../services/navigation'
+import { getNavigationGuidance, isOffRoute } from '../../services/navigation'
+import { getRouteProgress, getPointDistanceMeters, type Point } from '../../services/routeGeometry'
+
+/** Temps passé hors itinéraire avant de recalculer (évite de réagir à un écart GPS ponctuel). */
+const REROUTE_DELAY_MS = 8_000
+/** Délai minimum entre deux recalculs. */
+const REROUTE_COOLDOWN_MS = 20_000
+/** Au-delà de cette imprécision, la position GPS n'est pas assez fiable pour recalculer. */
+const REROUTE_MAX_ACCURACY_METERS = 100
+/** Si on est déjà tout près de l'arrivée, inutile de recalculer. */
+const REROUTE_ARRIVAL_RADIUS_METERS = 100
 import {
   calculateRoute,
   getRouteModeLabel,
@@ -98,6 +108,12 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const updateNavigationPosition = useInterfaceStore((state) => state.updateNavigationPosition)
   const setNavigationError = useInterfaceStore((state) => state.setNavigationError)
   const setNavigationStepIndex = useInterfaceStore((state) => state.setNavigationStepIndex)
+  const setNavigationRerouting = useInterfaceStore((state) => state.setNavigationRerouting)
+  const applyReroute = useInterfaceStore((state) => state.applyReroute)
+  // Lus pendant la navigation sans relancer le suivi GPS à chaque changement.
+  const rerouteParamsRef = useRef({ destination, waypoints, routeMode, tollPreference })
+  rerouteParamsRef.current = { destination, waypoints, routeMode, tollPreference }
+  const lastRerouteAtRef = useRef(0)
   const toggleFavorite = useInterfaceStore((state) => state.toggleFavorite)
   const removeFavorite = useInterfaceStore((state) => state.removeFavorite)
   const setFavoriteShortcut = useInterfaceStore((state) => state.setFavoriteShortcut)
@@ -165,6 +181,35 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     setNavigationStepIndex(0)
     let stepIndex = 0
     let lastAlong: number | undefined
+    /** Dernière progression mesurée alors qu'on était bien sur le trajet. */
+    let lastOnRouteAlong = 0
+    let offRouteSince: number | null = null
+    let rerouteRequest: AbortController | null = null
+
+    const reroute = (from: Point) => {
+      const { destination: target, waypoints: stops, routeMode: mode, tollPreference: tolls } = rerouteParamsRef.current
+      if (!target) return
+      lastRerouteAtRef.current = Date.now()
+      // On garde seulement les étapes intermédiaires pas encore atteintes.
+      const remainingStops = stops.filter(
+        (stop) => getRouteProgress(route.coordinates, stop.coordinates).along > lastOnRouteAlong + 30,
+      )
+      const request = new AbortController()
+      rerouteRequest = request
+      setNavigationRerouting(true)
+      const here = { id: 'reroute-origin', name: 'Ma position', details: 'Position GPS actuelle', coordinates: from }
+      void calculateRoute(here, target, mode, remainingStops, tolls, request.signal)
+        .then(([newRoute]) => {
+          if (request.signal.aborted) return
+          if (newRoute) applyReroute(newRoute)
+          else setNavigationRerouting(false)
+        })
+        .catch(() => {
+          // Échec (réseau…) : on garde l'ancien trajet, nouvel essai après le délai minimum.
+          if (!request.signal.aborted) setNavigationRerouting(false)
+        })
+    }
+
     const watchId = watchCurrentLocation(
       (position) => {
         // Calcul unique par position GPS : MapCanvas lit le résultat dans le store.
@@ -172,6 +217,28 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
         stepIndex = guidance.stepIndex
         lastAlong = guidance.along
         updateNavigationPosition(position, guidance)
+
+        // Recalcul automatique après REROUTE_DELAY_MS hors itinéraire.
+        const now = Date.now()
+        if (!isOffRoute(guidance, position.accuracy)) {
+          offRouteSince = null
+          lastOnRouteAlong = guidance.along
+          return
+        }
+        offRouteSince ??= now
+        const target = rerouteParamsRef.current.destination
+        if (
+          !rerouteRequest &&
+          now - offRouteSince >= REROUTE_DELAY_MS &&
+          now - lastRerouteAtRef.current >= REROUTE_COOLDOWN_MS &&
+          position.accuracy <= REROUTE_MAX_ACCURACY_METERS &&
+          target &&
+          getPointDistanceMeters(position.coordinates, target.coordinates) > REROUTE_ARRIVAL_RADIUS_METERS
+        ) {
+          reroute(position.coordinates)
+        }
+        // Une fois la requête terminée (succès ou échec), on peut en relancer une plus tard.
+        if (rerouteRequest && now - lastRerouteAtRef.current >= REROUTE_COOLDOWN_MS) rerouteRequest = null
       },
       (error) => {
         setNavigationError(
@@ -182,8 +249,53 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       },
     )
 
-    return () => navigator.geolocation.clearWatch(watchId)
-  }, [navigationActive, route, updateNavigationPosition, setNavigationError, setNavigationStepIndex, stopNavigation])
+    return () => {
+      navigator.geolocation.clearWatch(watchId)
+      rerouteRequest?.abort()
+      setNavigationRerouting(false)
+    }
+  }, [
+    navigationActive,
+    route,
+    updateNavigationPosition,
+    setNavigationError,
+    setNavigationStepIndex,
+    setNavigationRerouting,
+    applyReroute,
+    stopNavigation,
+  ])
+
+  // Garde l'écran allumé pendant la navigation (sinon le téléphone se met en veille en plein trajet).
+  useEffect(() => {
+    if (!navigationActive || !('wakeLock' in navigator)) return
+
+    let wakeLock: WakeLockSentinel | null = null
+    let released = false
+    const requestWakeLock = async () => {
+      try {
+        const sentinel = await navigator.wakeLock.request('screen')
+        if (released) {
+          void sentinel.release()
+          return
+        }
+        wakeLock = sentinel
+      } catch {
+        // Refusé (batterie faible, onglet en arrière-plan…) : la navigation continue normalement.
+      }
+    }
+    // Le navigateur libère le verrou quand l'onglet passe en arrière-plan : on le redemande au retour.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && (!wakeLock || wakeLock.released)) void requestWakeLock()
+    }
+
+    void requestWakeLock()
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      released = true
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      void wakeLock?.release()
+    }
+  }, [navigationActive])
 
   const handleUseCurrentLocation = async () => {
     setLocationDialogClosing(true)

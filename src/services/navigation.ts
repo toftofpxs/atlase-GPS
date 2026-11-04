@@ -21,6 +21,11 @@ export type ManeuverDirection = 'straight' | 'left' | 'right' | 'uturn' | 'round
 /** Une manœuvre est considérée comme passée quand on est à moins de cette distance. */
 const MANEUVER_PASSED_METERS = 5
 
+/** Hors itinéraire : à plus de 75 m du tracé (ou plus si le GPS est imprécis). */
+export function isOffRoute(guidance: NavigationGuidance | null, accuracy: number): boolean {
+  return Boolean(guidance && guidance.distanceFromRoute > Math.max(75, accuracy * 1.5))
+}
+
 interface RouteTimeline {
   /** Distance depuis le départ de chaque manœuvre. */
   stepAlong: number[]

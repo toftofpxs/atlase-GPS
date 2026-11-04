@@ -38,6 +38,8 @@ interface InterfaceState {
   /** Position sur le trajet, calculée une seule fois par position GPS. */
   navigationGuidance: NavigationGuidance | null
   navigationStepIndex: number
+  /** Recalcul automatique en cours après une sortie d'itinéraire. */
+  navigationRerouting: boolean
   navigationError: string | null
   selectSection: (section: SidebarSection) => void
   toggleSettings: () => void
@@ -64,6 +66,9 @@ interface InterfaceState {
   stopNavigation: () => void
   setCurrentPosition: (position: CurrentPosition | null) => void
   updateNavigationPosition: (position: CurrentPosition, guidance: NavigationGuidance) => void
+  setNavigationRerouting: (rerouting: boolean) => void
+  /** Remplace le trajet en gardant la navigation active (recalcul après sortie d'itinéraire). */
+  applyReroute: (route: RouteSummary) => void
   setNavigationStepIndex: (stepIndex: number) => void
   setNavigationError: (error: string | null) => void
 }
@@ -96,7 +101,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   routeRequestId: 0,
   navigationActive: false,
   currentPosition: null, navigationGuidance: null,
-  navigationStepIndex: 0,
+  navigationStepIndex: 0, navigationRerouting: false,
   navigationError: null,
   selectSection: (activeSection) => set({ activeSection, settingsOpen: false, mobileNavOpen: false }),
   toggleSettings: () => set((state) => ({ settingsOpen: !state.settingsOpen, mobileNavOpen: false })),
@@ -125,7 +130,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
       routeRequestId: state.routeRequestId + 1,
       navigationActive: false,
       currentPosition: null, navigationGuidance: null,
-      navigationStepIndex: 0,
+      navigationStepIndex: 0, navigationRerouting: false,
       navigationError: null,
     })),
   setWaypoint: (stopIndex, waypoint) =>
@@ -143,7 +148,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
       routeRequestId: state.routeRequestId + 1,
       navigationActive: false,
       currentPosition: null, navigationGuidance: null,
-      navigationStepIndex: 0,
+      navigationStepIndex: 0, navigationRerouting: false,
       navigationError: null,
     })),
   removeWaypoint: (stopIndex) =>
@@ -157,7 +162,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
       routeRequestId: state.routeRequestId + 1,
       navigationActive: false,
       currentPosition: null, navigationGuidance: null,
-      navigationStepIndex: 0,
+      navigationStepIndex: 0, navigationRerouting: false,
       navigationError: null,
     })),
   setDestination: (destination) =>
@@ -171,7 +176,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
       routeRequestId: state.routeRequestId + 1,
       navigationActive: false,
       currentPosition: null, navigationGuidance: null,
-      navigationStepIndex: 0,
+      navigationStepIndex: 0, navigationRerouting: false,
       navigationError: null,
     })),
   toggleFavorite: (place) =>
@@ -206,7 +211,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
             routeRequestId: state.routeRequestId + 1,
             navigationActive: false,
             currentPosition: null, navigationGuidance: null,
-            navigationStepIndex: 0,
+            navigationStepIndex: 0, navigationRerouting: false,
             navigationError: null,
           },
     ),
@@ -225,7 +230,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
         routeError: null,
         navigationActive: false,
         currentPosition: null, navigationGuidance: null,
-        navigationStepIndex: 0,
+        navigationStepIndex: 0, navigationRerouting: false,
         navigationError: null,
       }
     })
@@ -250,10 +255,21 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
         : state,
     ),
   startNavigation: () =>
-    set({ navigationActive: true, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationError: null }),
+    set({ navigationActive: true, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null }),
   stopNavigation: () =>
-    set({ navigationActive: false, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationError: null }),
+    set({ navigationActive: false, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null }),
   setCurrentPosition: (currentPosition) => set({ currentPosition }),
+  setNavigationRerouting: (navigationRerouting) => set({ navigationRerouting }),
+  applyReroute: (route) =>
+    set({
+      route,
+      routeOptions: [route],
+      selectedRouteIndex: 0,
+      navigationGuidance: null,
+      navigationStepIndex: 0,
+      navigationRerouting: false,
+      navigationError: null,
+    }),
   updateNavigationPosition: (currentPosition, navigationGuidance) =>
     set({
       currentPosition,
@@ -270,7 +286,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
             selectedRouteIndex,
             navigationActive: false,
             currentPosition: null, navigationGuidance: null,
-            navigationStepIndex: 0,
+            navigationStepIndex: 0, navigationRerouting: false,
             navigationError: null,
           }
         : state

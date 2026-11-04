@@ -33,6 +33,7 @@ import {
   getManeuverDirection,
   getRemainingRouteMetrics,
   getRouteBearing,
+  isOffRoute,
 } from '../../services/navigation'
 import { useInterfaceStore } from '../../stores/interfaceStore'
 import type { FavoriteShortcut } from '../../stores/interfaceStore'
@@ -78,6 +79,10 @@ export function MapCanvas() {
   const routeOptions = useInterfaceStore((state) => state.routeOptions)
   const selectedRouteIndex = useInterfaceStore((state) => state.selectedRouteIndex)
   const navigationActive = useInterfaceStore((state) => state.navigationActive)
+  const navigationRerouting = useInterfaceStore((state) => state.navigationRerouting)
+  // Lu par l'effet du tracé sans le relancer : pas de recadrage sur tout le trajet en pleine navigation.
+  const navigationActiveRef = useRef(navigationActive)
+  navigationActiveRef.current = navigationActive
   const currentPosition = useInterfaceStore((state) => state.currentPosition)
   const movementIcon = useInterfaceStore((state) => state.movementIcon)
   const resolvedTheme = useInterfaceStore((state) => state.resolvedTheme)
@@ -94,11 +99,7 @@ export function MapCanvas() {
   const currentStep = route?.steps[guidance?.stepIndex ?? navigationStepIndex]
   const direction = getManeuverDirection(currentStep)
   const DirectionIcon = getDirectionIcon(direction)
-  const offRoute = Boolean(
-    currentPosition &&
-    guidance &&
-    guidance.distanceFromRoute > Math.max(75, currentPosition.accuracy * 1.5),
-  )
+  const offRoute = currentPosition ? isOffRoute(guidance, currentPosition.accuracy) : false
 
   // Distance parcourue sur le trajet. Si l'utilisateur est loin du trajet
   // (aperçu avant le départ, écart GPS), on garde la dernière valeur connue.
@@ -743,7 +744,7 @@ export function MapCanvas() {
       }
 
       void import('maplibre-gl').then(({ LngLatBounds }) => {
-        if (mapRef.current !== map) return
+        if (mapRef.current !== map || navigationActiveRef.current) return
         const allCoordinates = (routeOptions.length > 0 ? routeOptions : [route])
           .flatMap((option) => option.coordinates)
         const bounds = allCoordinates.reduce(
@@ -837,6 +838,10 @@ export function MapCanvas() {
               <p className="map-navigation-message" role="status">
                 <LoaderCircle size={16} className="route-button-spinner" />
                 Recherche de votre position GPS…
+              </p>
+            ) : navigationRerouting ? (
+              <p className="map-navigation-message" role="status">
+                <LoaderCircle size={16} className="route-button-spinner" /> Recalcul de l’itinéraire…
               </p>
             ) : offRoute && guidance ? (
               <p className="map-navigation-message map-navigation-error" role="status">
