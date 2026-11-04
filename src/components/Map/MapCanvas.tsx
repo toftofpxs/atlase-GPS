@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ErrorEvent,
   Map as MapLibreMap,
@@ -21,7 +21,13 @@ import {
   X,
 } from 'lucide-react'
 import { getMapStyleUrl, MAP_WORKER_URL } from '../../services/mapConfig'
-import { getRouteControls, type RouteControl } from '../../services/routeControls'
+import {
+  CONTROLS_REFETCH_STEP_METERS,
+  getRouteControls,
+  getUpcomingControls,
+  type RouteControl,
+} from '../../services/routeControls'
+import { getRouteProgress } from '../../services/routeGeometry'
 import { getSpeedLimit } from '../../services/speedLimit'
 import {
   formatManeuver,
@@ -68,6 +74,8 @@ export function MapCanvas() {
   const [speedLimitStatus, setSpeedLimitStatus] = useState<SpeedLimitStatus>('idle')
   const [routeControls, setRouteControls] = useState<RouteControl[]>([])
   const [routeControlsStatus, setRouteControlsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [routeControlsRetry, setRouteControlsRetry] = useState(0)
+  const [routeControlsPartial, setRouteControlsPartial] = useState<null | 'stops' | 'lights'>(null)
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
   const destination = useInterfaceStore((state) => state.destination)
@@ -93,10 +101,31 @@ export function MapCanvas() {
   const currentStep = route?.steps[guidance?.stepIndex ?? navigationStepIndex]
   const direction = getManeuverDirection(currentStep)
   const DirectionIcon = getDirectionIcon(direction)
-  const isOffRoute =
+  const offRoute = Boolean(
     currentPosition &&
     guidance &&
-    guidance.distanceFromRoute > Math.max(75, currentPosition.accuracy * 1.5)
+    guidance.distanceFromRoute > Math.max(75, currentPosition.accuracy * 1.5),
+  )
+
+  // Distance parcourue sur le trajet. Si l'utilisateur est loin du trajet
+  // (aperçu avant le départ, écart GPS), on garde la dernière valeur connue.
+  const routeProgressRef = useRef<{ route: typeof route; along: number }>({ route: null, along: 0 })
+  const routeProgress = useMemo(() => {
+    const previous = routeProgressRef.current.route === route ? routeProgressRef.current.along : 0
+    if (!route || !currentPosition) return previous
+    const progress = getRouteProgress(route.coordinates, currentPosition.coordinates)
+    return progress.distance <= 100 ? progress.along : previous
+  }, [route, currentPosition])
+  routeProgressRef.current = { route, along: routeProgress }
+  // Ne change que tous les CONTROLS_REFETCH_STEP_METERS : c'est ce qui déclenche une nouvelle recherche.
+  const controlsFetchFrom =
+    Math.floor(routeProgress / CONTROLS_REFETCH_STEP_METERS) * CONTROLS_REFETCH_STEP_METERS
+  const upcomingControls = useMemo(
+    () => getUpcomingControls(routeControls, routeProgress),
+    [routeControls, routeProgress],
+  )
+  const nextLight = upcomingControls.find((control) => control.type === 'traffic-light')
+  const nextStop = upcomingControls.find((control) => control.type === 'stop')
 
   useEffect(() => {
     if (!mapContainerRef.current) return
@@ -327,32 +356,40 @@ export function MapCanvas() {
     }
   }, [favorites, status])
 
+  // Nouveau trajet : on repart de zéro.
+  useEffect(() => {
+    setRouteControls([])
+    setRouteControlsPartial(null)
+  }, [route])
+
+  // Recherche sur les ~3 km devant l'utilisateur, relancée seulement tous les 1 km parcourus.
   useEffect(() => {
     if (status !== 'ready' || !route) {
-      setRouteControls([])
       setRouteControlsStatus('idle')
       return
     }
 
     const controller = new AbortController()
     let timedOut = false
-    setRouteControls([])
     setRouteControlsStatus('loading')
     const timeout = window.setTimeout(() => {
       timedOut = true
       controller.abort()
-    }, 35_000)
-    void getRouteControls(route, controller.signal)
-      .then((controls) => {
+    }, 40_000)
+    // Tant que la nouvelle réponse n'est pas complète, on garde les éléments déjà connus de l'autre type.
+    const keepPrevious = (type: RouteControl['type'], fresh: RouteControl[]) =>
+      setRouteControls((previous) => [...fresh, ...previous.filter((control) => control.type === type)])
+    void getRouteControls(route, controlsFetchFrom, controller.signal, (lights) => keepPrevious('stop', lights))
+      .then((result) => {
         if (controller.signal.aborted) return
-        setRouteControls(controls)
+        if (!result.stopsAvailable) keepPrevious('stop', result.controls)
+        else if (!result.lightsAvailable) keepPrevious('traffic-light', result.controls)
+        else setRouteControls(result.controls)
+        setRouteControlsPartial(!result.stopsAvailable ? 'stops' : !result.lightsAvailable ? 'lights' : null)
         setRouteControlsStatus('ready')
       })
       .catch(() => {
-        if (timedOut || !controller.signal.aborted) {
-          setRouteControls([])
-          setRouteControlsStatus('error')
-        }
+        if (timedOut || !controller.signal.aborted) setRouteControlsStatus('error')
       })
       .finally(() => window.clearTimeout(timeout))
 
@@ -360,21 +397,28 @@ export function MapCanvas() {
       window.clearTimeout(timeout)
       controller.abort()
     }
-  }, [route, status])
+  }, [route, controlsFetchFrom, routeControlsRetry, status])
 
+  // Affiche seulement les prochains feux et STOP ; les repères sont ajoutés/retirés un par un.
   useEffect(() => {
     const map = mapRef.current
     if (status !== 'ready' || !map) return
 
-    routeControlMarkerRefs.current.forEach((marker) => marker.remove())
-    routeControlMarkerRefs.current.clear()
-    if (routeControls.length === 0) return
+    const wantedIds = new Set(upcomingControls.map((control) => control.id))
+    routeControlMarkerRefs.current.forEach((marker, id) => {
+      if (wantedIds.has(id)) return
+      marker.remove()
+      routeControlMarkerRefs.current.delete(id)
+    })
+    const missing = upcomingControls.filter((control) => !routeControlMarkerRefs.current.has(control.id))
+    if (missing.length === 0) return
 
     let disposed = false
     void import('maplibre-gl').then(({ Marker }) => {
       if (disposed || mapRef.current !== map) return
 
-      for (const control of routeControls) {
+      for (const control of missing) {
+        if (routeControlMarkerRefs.current.has(control.id)) continue
         const element = document.createElement('div')
         element.className = `route-control-marker route-control-marker-${control.type}`
         element.setAttribute('role', 'img')
@@ -403,10 +447,8 @@ export function MapCanvas() {
 
     return () => {
       disposed = true
-      routeControlMarkerRefs.current.forEach((marker) => marker.remove())
-      routeControlMarkerRefs.current.clear()
     }
-  }, [routeControls, status])
+  }, [upcomingControls, status])
 
   useEffect(() => {
     const map = mapRef.current
@@ -782,19 +824,46 @@ export function MapCanvas() {
       <div className="map-host" ref={mapContainerRef} />
       {route && routeControlsStatus !== 'idle' && (
         <div className="route-controls-legend" role="status" aria-live="polite">
-          {routeControlsStatus === 'loading' ? (
-            <><LoaderCircle size={14} className="route-button-spinner" /> Recherche des panneaux et feux…</>
-          ) : routeControlsStatus === 'error' ? (
-            'Panneaux et feux indisponibles'
-          ) : routeControls.length === 0 ? (
-            'Aucun panneau ou feu répertorié sur ce trajet'
+          {routeControlsStatus === 'loading' && upcomingControls.length === 0 ? (
+            <><LoaderCircle size={14} className="route-button-spinner" /> Recherche des feux et STOP à proximité…</>
+          ) : routeControlsStatus === 'error' && upcomingControls.length === 0 ? (
+            <>
+              <span>Panneaux et feux indisponibles</span>
+              <button
+                type="button"
+                className="route-controls-retry"
+                onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
+              >
+                Réessayer
+              </button>
+            </>
+          ) : upcomingControls.length === 0 && !routeControlsPartial ? (
+            'Aucun feu ni STOP à proximité'
           ) : (
             <>
-              {routeControls.some((control) => control.type === 'stop') && (
-                <span><i className="route-controls-stop-key">STOP</i>{routeControls.filter((control) => control.type === 'stop').length} STOP</span>
+              {nextLight && (
+                <span>
+                  <i className="route-controls-light-key" />
+                  Feu dans {formatDistance(Math.max(0, nextLight.distanceAlongRoute - routeProgress))}
+                </span>
               )}
-              {routeControls.some((control) => control.type === 'traffic-light') && (
-                <span><i className="route-controls-light-key" />{routeControls.filter((control) => control.type === 'traffic-light').length} feux</span>
+              {nextStop && (
+                <span>
+                  <i className="route-controls-stop-key">STOP</i>
+                  STOP dans {formatDistance(Math.max(0, nextStop.distanceAlongRoute - routeProgress))}
+                </span>
+              )}
+              {routeControlsPartial && (
+                <span className="route-controls-partial">
+                  {routeControlsPartial === 'stops' ? 'STOP indisponibles' : 'Feux indisponibles'}
+                  <button
+                    type="button"
+                    className="route-controls-retry"
+                    onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
+                  >
+                    Réessayer
+                  </button>
+                </span>
               )}
               <small>Données OpenStreetMap, non exhaustives</small>
             </>
@@ -813,7 +882,7 @@ export function MapCanvas() {
                 <LoaderCircle size={16} className="route-button-spinner" />
                 Recherche de votre position GPS…
               </p>
-            ) : isOffRoute && guidance ? (
+            ) : offRoute && guidance ? (
               <p className="map-navigation-message map-navigation-error" role="status">
                 Vous êtes à {formatDistance(guidance.distanceFromRoute)} de l’itinéraire.
               </p>
@@ -1012,6 +1081,7 @@ function formatArrivalTime(duration: number): string {
     new Date(Date.now() + duration * 1000),
   )
 }
+
 
 function getCoordinatesDistance(first: [number, number], second: [number, number]): number {
   const radians = Math.PI / 180
