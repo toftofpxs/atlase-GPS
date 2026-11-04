@@ -2,6 +2,7 @@
 import type { Point } from './routeGeometry'
 
 const VALHALLA_TRACE_URL = 'https://valhalla1.openstreetmap.de/trace_attributes'
+const VALHALLA_TRACE_ROUTE_URL = 'https://valhalla1.openstreetmap.de/trace_route'
 /** Garde chaque requête trace_attributes loin des limites du serveur. */
 export const VALHALLA_MAX_POINTS = 2_500
 const REQUEST_TIMEOUT_MS = 15_000
@@ -19,17 +20,49 @@ export interface ValhallaTraceResponse {
   edges?: ValhallaTraceEdge[]
 }
 
+export interface OsrmLane {
+  indications?: string[]
+  valid?: boolean
+  active?: boolean
+  valid_indication?: string
+}
+
+export interface ValhallaTraceRouteOsrmResponse {
+  matchings?: {
+    legs?: { steps?: { intersections?: { location: Point; lanes?: OsrmLane[] }[] }[] }[]
+  }[]
+}
+
 /**
  * Attributs des routes empruntées par `line` (feux, limitations de vitesse…).
- * edge_walk est rapide et exact pour un tracé produit par Valhalla ;
- * map_snap est la solution de repli, plus tolérante.
  */
-export async function fetchTraceAttributes(
+export function fetchTraceAttributes(
   line: Point[],
   attributes: string[],
   signal: AbortSignal,
 ): Promise<ValhallaTraceResponse> {
-  let lastError: Error = new Error('Valhalla trace_attributes failed.')
+  return postTrace<ValhallaTraceResponse>(VALHALLA_TRACE_URL, line, { filters: { attributes, action: 'include' } }, signal)
+}
+
+/**
+ * Le trajet `line` recalculé au format OSRM : c'est le seul format où Valhalla
+ * donne les voies (flèches au sol) à chaque intersection.
+ */
+export function fetchTraceRouteOsrm(line: Point[], signal: AbortSignal): Promise<ValhallaTraceRouteOsrmResponse> {
+  return postTrace<ValhallaTraceRouteOsrmResponse>(VALHALLA_TRACE_ROUTE_URL, line, { format: 'osrm', language: 'fr-FR' }, signal)
+}
+
+/**
+ * edge_walk est rapide et exact pour un tracé produit par Valhalla ;
+ * map_snap est la solution de repli, plus tolérante.
+ */
+async function postTrace<T>(
+  url: string,
+  line: Point[],
+  options: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<T> {
+  let lastError: Error = new Error(`Valhalla ${url} failed.`)
   for (const shapeMatch of ['edge_walk', 'map_snap'] as const) {
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
     const controller = new AbortController()
@@ -37,19 +70,19 @@ export async function fetchTraceAttributes(
     signal.addEventListener('abort', abort, { once: true })
     const timeout = window.setTimeout(abort, REQUEST_TIMEOUT_MS)
     try {
-      const response = await fetch(VALHALLA_TRACE_URL, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encoded_polyline: encodePolyline6(line),
           costing: 'auto',
           shape_match: shapeMatch,
-          filters: { attributes, action: 'include' },
+          ...options,
         }),
         signal: controller.signal,
       })
-      if (response.ok) return (await response.json()) as ValhallaTraceResponse
-      lastError = new Error(`Valhalla trace_attributes answered ${response.status}.`)
+      if (response.ok) return (await response.json()) as T
+      lastError = new Error(`Valhalla ${url} answered ${response.status}.`)
     } catch (error) {
       if (signal.aborted) throw error
       lastError = error instanceof Error ? error : new Error(String(error))

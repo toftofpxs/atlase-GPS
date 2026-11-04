@@ -531,6 +531,14 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 /* En navigation, le bouton Trafic passerait sous la limitation de vitesse : on le masque. */
 .map-navigation-active .map-traffic-control { display: none; }
 
+/* Guidage de voies : sous le bandeau d'instruction. */
+.map-navigation-instruction .map-navigation-lanes { position: absolute; top: calc(100% + 6px); left: 0; display: flex; max-width: 100%; gap: 2px; padding: 5px 6px; overflow-x: auto; background: #1557b0; border-radius: 10px; box-shadow: var(--shadow-control); }
+.map-navigation-lane { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; color: rgb(255 255 255 / 40%); border-radius: 6px; }
+.map-navigation-lane + .map-navigation-lane { border-left: 1px dashed rgb(255 255 255 / 30%); border-radius: 0; }
+.map-navigation-lane.is-valid { color: #fff; }
+/* Sur mobile, la légende feux/STOP passe sous les voies quand elles sont affichées. */
+@media (max-width: 760px) { .map-canvas.map-navigation-active.has-lanes .route-controls-legend { top: 160px; } }
+
 /* Alerte de survitesse */
 .map-speed-limit.is-over { color: #fff; background: #d32f2f; animation: overspeed-pulse 0.9s ease-in-out infinite; }
 .map-current-speed.is-over { color: #fff; background: #d32f2f; border-color: #d32f2f; }

@@ -28,7 +28,9 @@ import {
   type RouteControl,
 } from '../../services/routeControls'
 import { getRouteSpeedLimits, getSpeedLimitAt, type SpeedLimitSpan } from '../../services/routeSpeedLimits'
+import { getRouteLanes, getUpcomingLanes, type LaneGuide } from '../../services/routeLanes'
 import { playAlertBeep } from '../../services/alertSound'
+import { LaneGuidance } from './LaneGuidance'
 
 /** Tolérance avant l'alerte de survitesse : 5 km/h, ou 5 % au-delà de 100 km/h. */
 const getOverspeedTolerance = (limit: number) => Math.max(5, limit * 0.05)
@@ -88,6 +90,7 @@ export function MapCanvas() {
   const [reportError, setReportError] = useState('')
   const [routeSpeedLimits, setRouteSpeedLimits] = useState<SpeedLimitSpan[] | null>(null)
   const [speedLimitsStatus, setSpeedLimitsStatus] = useState<SpeedLimitStatus>('idle')
+  const [laneGuides, setLaneGuides] = useState<LaneGuide[]>([])
   const lastOverspeedBeepRef = useRef(0)
   const [routeControls, setRouteControls] = useState<RouteControl[]>([])
   const [routeControlsStatus, setRouteControlsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -136,6 +139,8 @@ export function MapCanvas() {
     currentPosition?.speed === null || currentPosition?.speed === undefined ? null : currentPosition.speed * 3.6
   const overspeed =
     speedLimit !== null && currentSpeedKmh !== null && currentSpeedKmh > speedLimit + getOverspeedTolerance(speedLimit)
+  const upcomingLanes =
+    guidance && !offRoute && !navigationRerouting ? getUpcomingLanes(laneGuides, guidance.along) : null
   // Ne change que tous les CONTROLS_REFETCH_STEP_METERS : c'est ce qui déclenche une nouvelle recherche.
   const controlsFetchFrom =
     Math.floor(routeProgress / CONTROLS_REFETCH_STEP_METERS) * CONTROLS_REFETCH_STEP_METERS
@@ -721,6 +726,22 @@ export function MapCanvas() {
     return () => controller.abort()
   }, [navigationActive, route])
 
+  // Voies à prendre : une seule requête Valhalla pour tout le trajet, au démarrage de la navigation.
+  useEffect(() => {
+    setLaneGuides([])
+    if (!navigationActive || !route) return
+
+    const controller = new AbortController()
+    void getRouteLanes(route, controller.signal)
+      .then((guides) => {
+        if (!controller.signal.aborted) setLaneGuides(guides)
+      })
+      .catch(() => {
+        // Sans voies, la navigation fonctionne normalement.
+      })
+    return () => controller.abort()
+  }, [navigationActive, route])
+
   // Survitesse : un bip au début de chaque dépassement (au plus un toutes les 30 s).
   useEffect(() => {
     if (!overspeed) return
@@ -960,7 +981,7 @@ export function MapCanvas() {
 
   return (
     <section
-      className={`map-canvas ${navigationActive ? 'map-navigation-active' : ''}`}
+      className={`map-canvas ${navigationActive ? 'map-navigation-active' : ''} ${upcomingLanes ? 'has-lanes' : ''}`}
       aria-label={navigationActive ? 'Carte de navigation en perspective' : 'Carte interactive'}
     >
       <div className="map-host" ref={mapContainerRef} />
@@ -1052,6 +1073,9 @@ export function MapCanvas() {
                 </span>
               </>
             ) : null}
+            {upcomingLanes && (
+              <LaneGuidance lanes={upcomingLanes.guide.lanes} distance={formatDistance(upcomingLanes.distance)} />
+            )}
           </section>
 
           <section className="map-live-speeds" aria-label="Vitesses">
