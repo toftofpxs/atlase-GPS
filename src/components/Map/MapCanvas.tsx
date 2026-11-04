@@ -182,7 +182,7 @@ export function MapCanvas() {
           {
             onAdd: () => {
               const container = document.createElement('div')
-              container.className = 'maplibregl-ctrl maplibregl-ctrl-group'
+              container.className = 'maplibregl-ctrl maplibregl-ctrl-group map-traffic-control'
               const button = document.createElement('button')
               button.type = 'button'
               button.className = 'map-traffic-toggle'
@@ -972,7 +972,7 @@ export function MapCanvas() {
             <>
               {nextLight && (
                 <span>
-                  <i className="route-controls-light-key" />
+                  <i className="route-controls-light-key" aria-hidden="true"><span /><span /><span /></i>
                   Feu dans {formatDistance(Math.max(0, nextLight.distanceAlongRoute - routeProgress))}
                 </span>
               )}

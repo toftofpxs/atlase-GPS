@@ -246,7 +246,11 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .route-controls-retry { min-height: 30px; padding: 0 9px; color: var(--color-accent); background: transparent; border: 1px solid var(--color-line); border-radius: var(--radius-control); font-size: 11px; cursor: pointer; }
 .route-controls-retry:hover { background: var(--color-accent-soft); }
 .route-controls-stop-key { display: grid; width: 25px; height: 25px; place-items: center; color: #fff; background: #d71920; border: 2px solid #fff; outline: 1px solid #d71920; clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%); font-size: 6px; font-style: normal; font-weight: 800; }
-.route-controls-light-key { width: 10px; height: 25px; background: #252a31; border: 2px solid #101318; border-radius: 5px; box-shadow: inset 0 5px #ed2424, inset 0 -5px #32a852; }
+.route-controls-light-key { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px; background: #222831; border: 1.5px solid #101318; border-radius: 5px; }
+.route-controls-light-key span { width: 6px; height: 6px; border-radius: 50%; }
+.route-controls-light-key span:nth-child(1) { background: #f02929; box-shadow: 0 0 3px rgb(240 41 41 / 70%); }
+.route-controls-light-key span:nth-child(2) { background: #f6b51c; }
+.route-controls-light-key span:nth-child(3) { background: #24a148; }
 .destination-marker { position: relative; width: 22px; height: 22px; background: var(--color-accent); border: 2px solid var(--color-surface-raised); border-radius: 50% 50% 50% 4px; box-shadow: var(--shadow-control); transform: rotate(-45deg); }
 .destination-marker::after { position: absolute; top: 6px; left: 6px; width: 6px; height: 6px; content: ''; background: var(--color-surface-raised); border-radius: 50%; }
 .origin-marker, .waypoint-marker { background: var(--color-accent); }
@@ -524,3 +528,5 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .map-traffic-status { position: absolute; top: 12px; left: 50%; z-index: 4; padding: 6px 12px; color: var(--color-text); background: var(--color-surface-raised); border: 1px solid var(--color-line); border-radius: var(--radius-pill); box-shadow: var(--shadow-control); font-size: 12px; font-weight: 600; transform: translateX(-50%); pointer-events: none; white-space: nowrap; }
 .map-traffic-status.is-error { color: #d93025; }
 .map-navigation-active .map-traffic-status { top: auto; bottom: 120px; }
+/* En navigation, le bouton Trafic passerait sous la limitation de vitesse : on le masque. */
+.map-navigation-active .map-traffic-control { display: none; }
