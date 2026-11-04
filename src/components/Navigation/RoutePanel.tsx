@@ -12,11 +12,13 @@ import {
   Bookmark,
   BookmarkCheck,
   Bike,
+  BriefcaseBusiness,
   Car,
   CarFront,
   Circle,
   CornerDownRight,
   Footprints,
+  Home,
   LocateFixed,
   LoaderCircle,
   MapPin,
@@ -26,6 +28,7 @@ import {
   Plus,
   Route as RouteIcon,
   Search,
+  School,
   Sun,
   Trash2,
   Train,
@@ -40,7 +43,7 @@ import {
   getRoutingErrorMessage,
 } from '../../services/routing'
 import { useInterfaceStore } from '../../stores/interfaceStore'
-import type { MovementIcon, ThemeMode } from '../../stores/interfaceStore'
+import type { FavoriteShortcut, MovementIcon, ThemeMode } from '../../stores/interfaceStore'
 import type { RouteMode, TollPreference } from '../../types/geocoding'
 import type { SidebarSection } from '../../types/navigation'
 
@@ -94,6 +97,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const setNavigationStepIndex = useInterfaceStore((state) => state.setNavigationStepIndex)
   const toggleFavorite = useInterfaceStore((state) => state.toggleFavorite)
   const removeFavorite = useInterfaceStore((state) => state.removeFavorite)
+  const setFavoriteShortcut = useInterfaceStore((state) => state.setFavoriteShortcut)
   const setRouteMode = useInterfaceStore((state) => state.setRouteMode)
   const setTollPreference = useInterfaceStore((state) => state.setTollPreference)
   const selectRouteOption = useInterfaceStore((state) => state.selectRouteOption)
@@ -301,12 +305,35 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
                   }}
                   aria-label={`Utiliser ${favorite.name} comme destination`}
                 >
-                  <span className="favorite-icon"><MapPin size={16} /></span>
+                  <span className="favorite-icon" aria-hidden="true">
+                    {favorite.shortcut === 'home' ? <Home size={17} /> : null}
+                    {favorite.shortcut === 'work' ? <BriefcaseBusiness size={17} /> : null}
+                    {favorite.shortcut === 'school' ? <School size={17} /> : null}
+                    {!favorite.shortcut ? <MapPin size={16} /> : null}
+                  </span>
                   <span className="favorite-copy">
                     <span className="favorite-name">{favorite.name}</span>
                     {favorite.details && <span className="favorite-details">{favorite.details}</span>}
                   </span>
                 </button>
+                <label className="favorite-shortcut-control">
+                  <span>Repère sur la carte</span>
+                  <select
+                    aria-label={`Repère sur la carte pour ${favorite.name}`}
+                    value={favorite.shortcut ?? ''}
+                    onChange={(event) =>
+                      setFavoriteShortcut(
+                        favorite.id,
+                        getFavoriteShortcut(event.currentTarget.value),
+                      )
+                    }
+                  >
+                    <option value="">Aucun</option>
+                    <option value="home">Maison</option>
+                    <option value="work">Travail</option>
+                    <option value="school">École</option>
+                  </select>
+                </label>
                 <button
                   type="button"
                   className="favorite-remove"
@@ -787,6 +814,10 @@ function getCurrentTimeValue(): string {
 function getCurrentDateValue(): string {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+function getFavoriteShortcut(value: string): FavoriteShortcut | null {
+  return value === 'home' || value === 'work' || value === 'school' ? value : null
 }
 
 function getScheduledDepartureDate(date: string, time: string): Date | null {

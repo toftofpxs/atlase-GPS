@@ -6,6 +6,8 @@ import type { CurrentPosition, SidebarSection } from '../types/navigation'
 export type MovementIcon = 'dot' | 'arrow' | 'car'
 export type ThemeMode = 'auto' | 'light' | 'dark'
 export type ResolvedTheme = Exclude<ThemeMode, 'auto'>
+export type FavoriteShortcut = 'home' | 'work' | 'school'
+export type FavoritePlace = Destination & { shortcut?: FavoriteShortcut }
 
 interface InterfaceState {
   activeSection: SidebarSection
@@ -19,7 +21,7 @@ interface InterfaceState {
   origin: Destination | null
   waypoints: Destination[]
   destination: Destination | null
-  favorites: Destination[]
+  favorites: FavoritePlace[]
   routeMode: RouteMode
   tollPreference: TollPreference
   movementIcon: MovementIcon
@@ -45,6 +47,7 @@ interface InterfaceState {
   setDestination: (destination: Destination | null) => void
   toggleFavorite: (place: Destination) => void
   removeFavorite: (id: string) => void
+  setFavoriteShortcut: (id: string, shortcut: FavoriteShortcut | null) => void
   setRouteMode: (mode: RouteMode) => void
   setTollPreference: (preference: TollPreference) => void
   setMovementIcon: (icon: MovementIcon) => void
@@ -167,6 +170,16 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
     })),
   removeFavorite: (id) =>
     set((state) => ({ favorites: state.favorites.filter((favorite) => favorite.id !== id) })),
+  setFavoriteShortcut: (id, shortcut) =>
+    set((state) => ({
+      favorites: state.favorites.map((favorite) =>
+        favorite.id === id
+          ? { ...favorite, shortcut: shortcut ?? undefined }
+          : shortcut && favorite.shortcut === shortcut
+            ? { ...favorite, shortcut: undefined }
+            : favorite,
+      ),
+    })),
   setRouteMode: (routeMode) =>
     set((state) =>
       state.routeMode === routeMode
