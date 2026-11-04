@@ -89,7 +89,7 @@ export function getLocationErrorMessage(error: unknown): string {
     }
     if (error.message === 'unsupported') return 'La géolocalisation n’est pas prise en charge par ce navigateur.'
     if (error.message === 'permission-denied') {
-      return 'L’accès à la position a été refusé pour ce site. Vérifiez Réglages > Safari > Localisation et choisissez Autoriser.'
+      return 'Safari a refusé l’accès à votre position pour ce site. Sur iPhone ou iPad, vérifiez Réglages > Apps > Safari > Localisation, puis dans Safari ouvrez les réglages de ce site et choisissez Autoriser pour la localisation. Sur Mac, vérifiez Safari > Réglages > Sites web > Localisation. Rechargez ensuite la page.'
     }
   }
   return 'Votre position est indisponible. Vérifiez le signal GPS et réessayez.'
