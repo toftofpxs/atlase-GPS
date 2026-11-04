@@ -23,6 +23,7 @@ export function SearchBar() {
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
   const destination = useInterfaceStore((state) => state.destination)
+  const setFavoriteDraft = useInterfaceStore((state) => state.setFavoriteDraft)
   const setOrigin = useInterfaceStore((state) => state.setOrigin)
   const setWaypoint = useInterfaceStore((state) => state.setWaypoint)
   const removeWaypoint = useInterfaceStore((state) => state.removeWaypoint)
@@ -39,6 +40,8 @@ export function SearchBar() {
       ? 'Point de départ'
       : searchTarget === 'stop'
         ? 'Étape intermédiaire'
+        : searchTarget === 'favorite'
+          ? 'Lieu favori'
         : 'Destination'
   const normalizedQuery = query.trim()
 
@@ -93,10 +96,16 @@ export function SearchBar() {
       setOrigin(place)
     } else if (searchTarget === 'stop') {
       setWaypoint(searchStopIndex, place)
+    } else if (searchTarget === 'favorite') {
+      setFavoriteDraft(place)
     } else {
       setDestination(place)
     }
-    setQuery([place.name, place.details].filter(Boolean).join(', '))
+    setQuery(
+      searchTarget === 'favorite'
+        ? ''
+        : [place.name, place.details].filter(Boolean).join(', '),
+    )
     setResults([])
     setFocused(false)
     setActiveIndex(-1)
@@ -136,7 +145,8 @@ export function SearchBar() {
     setQuery('')
     setResults([])
     setError('')
-    if (searchTarget === 'origin') setOrigin(null)
+    if (searchTarget === 'favorite') setFavoriteDraft(null)
+    else if (searchTarget === 'origin') setOrigin(null)
     else if (searchTarget === 'stop' && waypoints[searchStopIndex]) removeWaypoint(searchStopIndex)
     else setDestination(null)
     setReplacingSelection(false)
@@ -169,6 +179,8 @@ export function SearchBar() {
               ? 'Rechercher un point de départ'
               : searchTarget === 'stop'
                 ? 'Rechercher une étape intermédiaire'
+                : searchTarget === 'favorite'
+                  ? 'Rechercher un lieu à enregistrer'
                 : 'Où souhaitez-vous aller ?'
           }
           value={query}

@@ -15,9 +15,10 @@ interface InterfaceState {
   mobileNavOpen: boolean
   themeMode: ThemeMode
   resolvedTheme: ResolvedTheme
-  searchTarget: 'origin' | 'destination' | 'stop'
+  searchTarget: 'origin' | 'destination' | 'stop' | 'favorite'
   searchStopIndex: number
   searchRequest: number
+  favoriteDraft: Destination | null
   origin: Destination | null
   waypoints: Destination[]
   destination: Destination | null
@@ -40,7 +41,8 @@ interface InterfaceState {
   toggleMobileNav: () => void
   setThemeMode: (themeMode: ThemeMode) => void
   setResolvedTheme: (resolvedTheme: ResolvedTheme) => void
-  openSearch: (target: 'origin' | 'destination' | 'stop', stopIndex?: number) => void
+  openSearch: (target: 'origin' | 'destination' | 'stop' | 'favorite', stopIndex?: number) => void
+  setFavoriteDraft: (place: Destination | null) => void
   setOrigin: (origin: Destination | null) => void
   setWaypoint: (stopIndex: number, waypoint: Destination | null) => void
   removeWaypoint: (stopIndex: number) => void
@@ -74,6 +76,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   searchTarget: 'destination',
   searchStopIndex: 0,
   searchRequest: 0,
+  favoriteDraft: null,
   origin: null,
   waypoints: [],
   destination: null,
@@ -101,6 +104,11 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
       searchTarget,
       searchStopIndex,
       searchRequest: state.searchRequest + 1,
+    })),
+  setFavoriteDraft: (favoriteDraft) =>
+    set((state) => ({
+      favoriteDraft,
+      searchTarget: state.searchTarget === 'favorite' ? 'destination' : state.searchTarget,
     })),
   setOrigin: (origin) =>
     set((state) => ({

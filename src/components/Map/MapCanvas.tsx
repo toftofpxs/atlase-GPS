@@ -8,17 +8,14 @@ import type {
 import {
   AlertTriangle,
   ArrowUp,
-  BriefcaseBusiness,
   Car,
   Clock3,
   CornerUpLeft,
   CornerUpRight,
-  Home,
   LocateFixed,
   LoaderCircle,
   Plus,
   RotateCcw,
-  School,
   Shield,
   StopCircle,
   X,
@@ -81,15 +78,9 @@ export function MapCanvas() {
   const navigationError = useInterfaceStore((state) => state.navigationError)
   const favorites = useInterfaceStore((state) => state.favorites)
   const stopNavigation = useInterfaceStore((state) => state.stopNavigation)
-  const setDestination = useInterfaceStore((state) => state.setDestination)
-  const selectSection = useInterfaceStore((state) => state.selectSection)
   const isDarkMapStyle = resolvedTheme === 'dark'
   const resolvedThemeRef = useRef(resolvedTheme)
   resolvedThemeRef.current = resolvedTheme
-  const quickPlaces = (['home', 'work', 'school'] as const).flatMap((shortcut) =>
-    favorites.filter((favorite) => favorite.shortcut === shortcut),
-  )
-
   const guidance =
     route && currentPosition
       ? getNavigationGuidance(route, currentPosition.coordinates, navigationStepIndex)
@@ -288,25 +279,28 @@ export function MapCanvas() {
 
     favoriteMarkerRefs.current.forEach((marker) => marker.remove())
     favoriteMarkerRefs.current.clear()
-    const savedPlaces = favorites.filter((favorite) => favorite.shortcut)
-    if (savedPlaces.length === 0) return
+    if (favorites.length === 0) return
 
     let disposed = false
     void import('maplibre-gl').then(({ Marker }) => {
       if (disposed || mapRef.current !== map) return
 
-      for (const favorite of savedPlaces) {
-        if (!favorite.shortcut) continue
+      for (const favorite of favorites) {
         const markerElement = document.createElement('div')
-        markerElement.className = `saved-place-marker saved-place-marker-${favorite.shortcut}`
+        markerElement.className = `saved-place-marker saved-place-marker-${favorite.shortcut ?? 'favorite'}`
         markerElement.setAttribute('role', 'img')
         markerElement.setAttribute(
           'aria-label',
-          `${getFavoriteShortcutLabel(favorite.shortcut)} : ${favorite.name}`,
+          `${favorite.shortcut ? `${getFavoriteShortcutLabel(favorite.shortcut)} : ` : 'Favori : '}${favorite.name}`,
         )
+        const markerIcon = document.createElement('span')
+        markerIcon.className = 'saved-place-marker-icon'
+        markerIcon.setAttribute('aria-hidden', 'true')
+        markerIcon.textContent = getFavoriteMarkerSymbol(favorite.shortcut)
         const markerLabel = document.createElement('span')
         markerLabel.className = 'saved-place-marker-label'
-        markerLabel.textContent = getFavoriteShortcutLabel(favorite.shortcut)
+        markerLabel.textContent = favorite.name
+        markerElement.append(markerIcon)
         markerElement.append(markerLabel)
         const marker = new Marker({ element: markerElement, anchor: 'bottom' })
           .setLngLat(favorite.coordinates)
@@ -699,46 +693,6 @@ export function MapCanvas() {
       aria-label={navigationActive ? 'Carte de navigation en perspective' : 'Carte interactive'}
     >
       <div className="map-host" ref={mapContainerRef} />
-      {!navigationActive && (
-        <section className="map-quick-places" aria-label="Raccourcis vers vos lieux favoris">
-          <h2>Où allez-vous ?</h2>
-          {quickPlaces.length > 0 ? (
-            <div className="map-quick-place-list">
-              {quickPlaces.map((favorite) => {
-                const shortcut = favorite.shortcut
-                if (!shortcut) return null
-                const Icon = getFavoriteShortcutIcon(shortcut)
-                return (
-                  <button
-                    key={favorite.id}
-                    className="map-quick-place"
-                    type="button"
-                    aria-label={`Aller ${getFavoriteShortcutActionLabel(shortcut)} : ${favorite.name}`}
-                    onClick={() => {
-                      setDestination(favorite)
-                      selectSection('route')
-                    }}
-                  >
-                    <Icon size={16} aria-hidden="true" />
-                    <span>
-                      <strong>{getFavoriteShortcutLabel(shortcut)}</strong>
-                      <small>{favorite.name}</small>
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <button
-              className="map-quick-place-empty"
-              type="button"
-              onClick={() => selectSection('favorites')}
-            >
-              Enregistrer Maison, Travail ou École dans vos favoris
-            </button>
-          )}
-        </section>
-      )}
       {navigationActive && route && (
         <>
           <section className="map-navigation-instruction" aria-label="Prochaine direction">
@@ -1000,24 +954,15 @@ function getFavoriteShortcutLabel(shortcut: FavoriteShortcut): string {
   }
 }
 
-function getFavoriteShortcutIcon(shortcut: FavoriteShortcut) {
+function getFavoriteMarkerSymbol(shortcut: FavoriteShortcut | undefined): string {
   switch (shortcut) {
     case 'home':
-      return Home
+      return '🏠'
     case 'work':
-      return BriefcaseBusiness
+      return '💼'
     case 'school':
-      return School
-  }
-}
-
-function getFavoriteShortcutActionLabel(shortcut: FavoriteShortcut): string {
-  switch (shortcut) {
-    case 'home':
-      return 'à la maison'
-    case 'work':
-      return 'au travail'
-    case 'school':
-      return 'à l’école'
+      return '🏫'
+    default:
+      return '★'
   }
 }

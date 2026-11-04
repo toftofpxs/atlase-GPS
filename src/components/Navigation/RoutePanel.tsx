@@ -29,6 +29,7 @@ import {
   Route as RouteIcon,
   Search,
   School,
+  Star,
   Sun,
   Trash2,
   Train,
@@ -67,10 +68,12 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const [locationDialogClosing, setLocationDialogClosing] = useState(false)
   const [departureDate, setDepartureDate] = useState(getCurrentDateValue)
   const [departureTime, setDepartureTime] = useState(getCurrentTimeValue)
+  const [favoriteDraftShortcut, setFavoriteDraftShortcut] = useState<FavoriteShortcut | ''>('')
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
   const destination = useInterfaceStore((state) => state.destination)
   const favorites = useInterfaceStore((state) => state.favorites)
+  const favoriteDraft = useInterfaceStore((state) => state.favoriteDraft)
   const routeMode = useInterfaceStore((state) => state.routeMode)
   const tollPreference = useInterfaceStore((state) => state.tollPreference)
   const movementIcon = useInterfaceStore((state) => state.movementIcon)
@@ -98,10 +101,15 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const toggleFavorite = useInterfaceStore((state) => state.toggleFavorite)
   const removeFavorite = useInterfaceStore((state) => state.removeFavorite)
   const setFavoriteShortcut = useInterfaceStore((state) => state.setFavoriteShortcut)
+  const setFavoriteDraft = useInterfaceStore((state) => state.setFavoriteDraft)
   const setRouteMode = useInterfaceStore((state) => state.setRouteMode)
   const setTollPreference = useInterfaceStore((state) => state.setTollPreference)
   const selectRouteOption = useInterfaceStore((state) => state.selectRouteOption)
   const selectSection = useInterfaceStore((state) => state.selectSection)
+  useEffect(() => {
+    setFavoriteDraftShortcut('')
+  }, [favoriteDraft?.id])
+
   useEffect(() => {
     if (section !== 'route' || settingsOpen || navigationActive) {
       setMobilePanelCollapsed(false)
@@ -286,13 +294,66 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     return (
       <section className="side-panel" aria-labelledby="panel-title">
         <PanelHeading eyebrow="Enregistrés" title="Vos lieux préférés" />
-        {favorites.length === 0 ? (
+        <button
+          type="button"
+          className="add-favorite-button"
+          onClick={() => openSearch('favorite')}
+        >
+          <Plus size={17} />
+          Ajouter un lieu favori
+        </button>
+        {favoriteDraft && (
+          <div className="favorite-draft">
+            <div className="favorite-draft-place">
+              <MapPin size={17} aria-hidden="true" />
+              <span>
+                <strong>{favoriteDraft.name}</strong>
+                {favoriteDraft.details && <small>{favoriteDraft.details}</small>}
+              </span>
+            </div>
+            <label className="favorite-shortcut-control">
+              <span>Choisir une catégorie</span>
+              <select
+                aria-label={`Catégorie pour ${favoriteDraft.name}`}
+                value={favoriteDraftShortcut}
+                onChange={(event) =>
+                  setFavoriteDraftShortcut(
+                    getFavoriteShortcut(event.currentTarget.value) ?? '',
+                  )
+                }
+              >
+                <option value="">Favori ★</option>
+                <option value="home">Maison</option>
+                <option value="work">Travail</option>
+                <option value="school">École</option>
+              </select>
+            </label>
+            <div className="favorite-draft-actions">
+              <button type="button" onClick={() => setFavoriteDraft(null)}>Annuler</button>
+              <button
+                type="button"
+                disabled={favorites.some((favorite) => favorite.id === favoriteDraft.id)}
+                onClick={() => {
+                  toggleFavorite(favoriteDraft)
+                  if (favoriteDraftShortcut) {
+                    setFavoriteShortcut(favoriteDraft.id, favoriteDraftShortcut)
+                  }
+                  setFavoriteDraft(null)
+                  setFavoriteDraftShortcut('')
+                }}
+              >
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        )}
+        {favorites.length === 0 && !favoriteDraft ? (
           <div className="empty-state">
-            <div className="empty-icon"><MapPin size={20} /></div>
-            <p>Enregistrez vos destinations pour les retrouver ici.</p>
+            <div className="empty-icon"><Star size={20} /></div>
+            <p>Ajoutez une adresse, puis choisissez Maison, Travail, École ou un favori simple.</p>
             <span className="empty-caption">Stockés uniquement sur cet appareil</span>
           </div>
-        ) : (
+        ) : favorites.length > 0 ? (
           <ul className="favorite-list" aria-label="Destinations favorites">
             {favorites.map((favorite) => (
               <li className="favorite-item" key={favorite.id}>
@@ -305,11 +366,11 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
                   }}
                   aria-label={`Utiliser ${favorite.name} comme destination`}
                 >
-                  <span className="favorite-icon" aria-hidden="true">
+                  <span className={`favorite-icon${favorite.shortcut ? '' : ' favorite-icon-star'}`} aria-hidden="true">
                     {favorite.shortcut === 'home' ? <Home size={17} /> : null}
                     {favorite.shortcut === 'work' ? <BriefcaseBusiness size={17} /> : null}
                     {favorite.shortcut === 'school' ? <School size={17} /> : null}
-                    {!favorite.shortcut ? <MapPin size={16} /> : null}
+                    {!favorite.shortcut ? <Star size={17} fill="currentColor" /> : null}
                   </span>
                   <span className="favorite-copy">
                     <span className="favorite-name">{favorite.name}</span>
@@ -317,7 +378,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
                   </span>
                 </button>
                 <label className="favorite-shortcut-control">
-                  <span>Repère sur la carte</span>
+                  <span>Catégorie</span>
                   <select
                     aria-label={`Repère sur la carte pour ${favorite.name}`}
                     value={favorite.shortcut ?? ''}
@@ -328,7 +389,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
                       )
                     }
                   >
-                    <option value="">Aucun</option>
+                    <option value="">Favori ★</option>
                     <option value="home">Maison</option>
                     <option value="work">Travail</option>
                     <option value="school">École</option>
@@ -346,7 +407,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
       </section>
     )
   }
