@@ -5,16 +5,20 @@ import {
   BookmarkCheck,
   Bike,
   Car,
+  CarFront,
   Circle,
   CornerDownRight,
   Footprints,
   LocateFixed,
   LoaderCircle,
   MapPin,
+  Monitor,
+  Moon,
   Navigation2,
   Plus,
   Route as RouteIcon,
   Search,
+  Sun,
   Trash2,
   Train,
   X,
@@ -28,6 +32,7 @@ import {
   getRoutingErrorMessage,
 } from '../../services/routing'
 import { useInterfaceStore } from '../../stores/interfaceStore'
+import type { MovementIcon, ThemeMode } from '../../stores/interfaceStore'
 import type { RouteMode, TollPreference } from '../../types/geocoding'
 import type { SidebarSection } from '../../types/navigation'
 
@@ -53,6 +58,10 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const favorites = useInterfaceStore((state) => state.favorites)
   const routeMode = useInterfaceStore((state) => state.routeMode)
   const tollPreference = useInterfaceStore((state) => state.tollPreference)
+  const movementIcon = useInterfaceStore((state) => state.movementIcon)
+  const setMovementIcon = useInterfaceStore((state) => state.setMovementIcon)
+  const themeMode = useInterfaceStore((state) => state.themeMode)
+  const setThemeMode = useInterfaceStore((state) => state.setThemeMode)
   const route = useInterfaceStore((state) => state.route)
   const routeOptions = useInterfaceStore((state) => state.routeOptions)
   const selectedRouteIndex = useInterfaceStore((state) => state.selectedRouteIndex)
@@ -154,15 +163,61 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       <section className="side-panel" aria-labelledby="panel-title">
         <PanelHeading eyebrow="Préférences" title="Paramètres" />
         <div className="settings-card">
-          <div className="settings-row">
-            <div>
-              <p className="settings-title">Apparence</p>
-              <p className="settings-description">Adaptée au système</p>
-            </div>
-            <span className="status-pill">Automatique</span>
+          <div>
+            <p className="settings-title">Apparence</p>
+            <p className="settings-description">Le mode Auto suit le thème de votre appareil.</p>
+          </div>
+          <div className="theme-mode-options" role="group" aria-label="Thème de l’application">
+            {([
+              { value: 'auto', label: 'Auto', Icon: Monitor },
+              { value: 'light', label: 'Clair', Icon: Sun },
+              { value: 'dark', label: 'Sombre', Icon: Moon },
+            ] satisfies { value: ThemeMode; label: string; Icon: typeof Monitor }[]).map(
+              ({ value, label, Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`theme-mode-option ${themeMode === value ? 'theme-mode-option-selected' : ''}`}
+                  aria-pressed={themeMode === value}
+                  onClick={() => setThemeMode(value)}
+                >
+                  <Icon size={16} />
+                  {label}
+                </button>
+              ),
+            )}
           </div>
         </div>
-        <p className="panel-footnote">D’autres préférences seront disponibles dans une prochaine étape.</p>
+        <div className="settings-card">
+          <div className="settings-row">
+            <div>
+              <p className="settings-title">Icône de déplacement</p>
+              <p className="settings-description">Choisissez l’icône affichée sur la carte.</p>
+            </div>
+          </div>
+          <div className="movement-icon-options" role="group" aria-label="Icône de déplacement">
+            {([
+              { value: 'dot', label: 'Point' },
+              { value: 'arrow', label: 'Flèche' },
+              { value: 'car', label: 'Voiture 3D' },
+            ] satisfies { value: MovementIcon; label: string }[]).map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                className={`movement-icon-option ${movementIcon === value ? 'movement-icon-option-selected' : ''}`}
+                aria-pressed={movementIcon === value}
+                onClick={() => setMovementIcon(value)}
+              >
+                <span className={`movement-icon-preview movement-icon-preview-${value}`} aria-hidden="true">
+                  {value === 'dot' ? <Circle size={22} fill="currentColor" /> : null}
+                  {value === 'arrow' ? <Navigation2 size={24} fill="currentColor" /> : null}
+                  {value === 'car' ? <CarFront size={25} fill="currentColor" /> : null}
+                </span>
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </section>
     )
   }

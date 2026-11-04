@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { ArrowUpRight, Menu, Navigation2, X } from 'lucide-react'
 import { MapCanvas } from './components/Map/MapCanvas'
 import { RoutePanel } from './components/Navigation/RoutePanel'
@@ -11,6 +12,24 @@ function App() {
   const settingsOpen = useInterfaceStore((state) => state.settingsOpen)
   const mobileNavOpen = useInterfaceStore((state) => state.mobileNavOpen)
   const toggleMobileNav = useInterfaceStore((state) => state.toggleMobileNav)
+  const themeMode = useInterfaceStore((state) => state.themeMode)
+  const setResolvedTheme = useInterfaceStore((state) => state.setResolvedTheme)
+
+  useEffect(() => {
+    const colorScheme = window.matchMedia('(prefers-color-scheme: dark)')
+    const applyTheme = () => {
+      const resolvedTheme =
+        themeMode === 'auto' ? (colorScheme.matches ? 'dark' : 'light') : themeMode
+      document.documentElement.dataset.theme = resolvedTheme
+      setResolvedTheme(resolvedTheme)
+    }
+
+    applyTheme()
+    if (themeMode !== 'auto') return
+
+    colorScheme.addEventListener('change', applyTheme)
+    return () => colorScheme.removeEventListener('change', applyTheme)
+  }, [setResolvedTheme, themeMode])
 
   return (
     <main className="app-shell">

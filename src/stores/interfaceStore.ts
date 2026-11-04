@@ -3,10 +3,16 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import type { Destination, RouteMode, RouteSummary, TollPreference } from '../types/geocoding'
 import type { CurrentPosition, SidebarSection } from '../types/navigation'
 
+export type MovementIcon = 'dot' | 'arrow' | 'car'
+export type ThemeMode = 'auto' | 'light' | 'dark'
+export type ResolvedTheme = Exclude<ThemeMode, 'auto'>
+
 interface InterfaceState {
   activeSection: SidebarSection
   settingsOpen: boolean
   mobileNavOpen: boolean
+  themeMode: ThemeMode
+  resolvedTheme: ResolvedTheme
   searchTarget: 'origin' | 'destination' | 'stop'
   searchStopIndex: number
   searchRequest: number
@@ -16,6 +22,7 @@ interface InterfaceState {
   favorites: Destination[]
   routeMode: RouteMode
   tollPreference: TollPreference
+  movementIcon: MovementIcon
   route: RouteSummary | null
   routeOptions: RouteSummary[]
   selectedRouteIndex: number
@@ -29,6 +36,8 @@ interface InterfaceState {
   selectSection: (section: SidebarSection) => void
   toggleSettings: () => void
   toggleMobileNav: () => void
+  setThemeMode: (themeMode: ThemeMode) => void
+  setResolvedTheme: (resolvedTheme: ResolvedTheme) => void
   openSearch: (target: 'origin' | 'destination' | 'stop', stopIndex?: number) => void
   setOrigin: (origin: Destination | null) => void
   setWaypoint: (stopIndex: number, waypoint: Destination | null) => void
@@ -38,6 +47,7 @@ interface InterfaceState {
   removeFavorite: (id: string) => void
   setRouteMode: (mode: RouteMode) => void
   setTollPreference: (preference: TollPreference) => void
+  setMovementIcon: (icon: MovementIcon) => void
   selectRouteOption: (index: number) => void
   beginRouteCalculation: () => number
   completeRouteCalculation: (requestId: number, routes: RouteSummary[]) => void
@@ -53,6 +63,11 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   activeSection: 'route',
   settingsOpen: false,
   mobileNavOpen: false,
+  themeMode: 'auto',
+  resolvedTheme:
+    typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light',
   searchTarget: 'destination',
   searchStopIndex: 0,
   searchRequest: 0,
@@ -62,6 +77,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   favorites: [],
   routeMode: 'driving',
   tollPreference: 'with-tolls',
+  movementIcon: 'arrow',
   route: null,
   routeOptions: [],
   selectedRouteIndex: 0,
@@ -75,6 +91,8 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   selectSection: (activeSection) => set({ activeSection, settingsOpen: false, mobileNavOpen: false }),
   toggleSettings: () => set((state) => ({ settingsOpen: !state.settingsOpen, mobileNavOpen: false })),
   toggleMobileNav: () => set((state) => ({ mobileNavOpen: !state.mobileNavOpen })),
+  setThemeMode: (themeMode) => set({ themeMode }),
+  setResolvedTheme: (resolvedTheme) => set({ resolvedTheme }),
   openSearch: (searchTarget, searchStopIndex = 0) =>
     set((state) => ({
       searchTarget,
@@ -168,6 +186,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
           },
     ),
   setTollPreference: (tollPreference) => set({ tollPreference }),
+  setMovementIcon: (movementIcon) => set({ movementIcon }),
   beginRouteCalculation: () => {
     let requestId = 0
     set((state) => {
@@ -229,5 +248,9 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
 }), {
   name: 'atlas-favorites',
   storage: createJSONStorage(() => localStorage),
-  partialize: (state) => ({ favorites: state.favorites }),
+  partialize: (state) => ({
+    favorites: state.favorites,
+    movementIcon: state.movementIcon,
+    themeMode: state.themeMode,
+  }),
 }))

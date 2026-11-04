@@ -5,17 +5,55 @@ export function watchCurrentLocation(
   onPosition: (position: CurrentPosition) => void,
   onError: (error: GeolocationPositionError) => void,
 ): number {
+  let previousFix: { coordinates: [number, number]; accuracy: number; timestamp: number } | null = null
+
   return navigator.geolocation.watchPosition(
-    ({ coords }) => {
+    ({ coords, timestamp }) => {
+      const coordinates: [number, number] = [coords.longitude, coords.latitude]
+      const deviceSpeed = Number.isFinite(coords.speed) && coords.speed !== null && coords.speed >= 0
+        ? coords.speed
+        : null
+      let speed = deviceSpeed
+
+      if (
+        speed === null &&
+        previousFix &&
+        coords.accuracy <= 50 &&
+        previousFix.accuracy <= 50
+      ) {
+        const elapsedSeconds = (timestamp - previousFix.timestamp) / 1000
+        if (elapsedSeconds >= 0.5 && elapsedSeconds <= 10) {
+          const estimatedSpeed = getDistanceMeters(previousFix.coordinates, coordinates) / elapsedSeconds
+          if (estimatedSpeed <= 70) speed = estimatedSpeed < 0.8 ? 0 : estimatedSpeed
+        }
+      }
+
+      previousFix = { coordinates, accuracy: coords.accuracy, timestamp }
       onPosition({
-        coordinates: [coords.longitude, coords.latitude],
+        coordinates,
         accuracy: coords.accuracy,
         heading: coords.heading,
+        speed,
       })
     },
     onError,
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 1500 },
   )
+}
+
+function getDistanceMeters(
+  first: [number, number],
+  second: [number, number],
+): number {
+  const radians = Math.PI / 180
+  const latitudeDelta = (second[1] - first[1]) * radians
+  const longitudeDelta = (second[0] - first[0]) * radians
+  const latitude1 = first[1] * radians
+  const latitude2 = second[1] * radians
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(latitude1) * Math.cos(latitude2) * Math.sin(longitudeDelta / 2) ** 2
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine))
 }
 
 export function getCurrentLocation(): Promise<Destination> {
