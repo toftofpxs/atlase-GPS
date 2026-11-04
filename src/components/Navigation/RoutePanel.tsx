@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 import { getCurrentLocation, getLocationErrorMessage, watchCurrentLocation } from '../../services/location'
 import { getNavigationGuidance, isOffRoute } from '../../services/navigation'
+import { unlockAlertSound } from '../../services/alertSound'
 import { getRouteProgress, getPointDistanceMeters, type Point } from '../../services/routeGeometry'
 
 /** Temps passé hors itinéraire avant de recalculer (évite de réagir à un écart GPS ponctuel). */
@@ -908,6 +909,8 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
           disabled={route.steps.length === 0}
           onClick={() => {
             setNavigationError(null)
+            // Le son n'est autorisé qu'après un clic : on le débloque maintenant pour l'alerte de survitesse.
+            unlockAlertSound()
             startNavigation()
           }}
         >

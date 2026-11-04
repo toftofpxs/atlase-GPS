@@ -530,3 +530,10 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .map-navigation-active .map-traffic-status { top: auto; bottom: 120px; }
 /* En navigation, le bouton Trafic passerait sous la limitation de vitesse : on le masque. */
 .map-navigation-active .map-traffic-control { display: none; }
+
+/* Alerte de survitesse */
+.map-speed-limit.is-over { color: #fff; background: #d32f2f; animation: overspeed-pulse 0.9s ease-in-out infinite; }
+.map-current-speed.is-over { color: #fff; background: #d32f2f; border-color: #d32f2f; }
+.map-overspeed-label { padding: 3px 8px; color: #fff; background: #d32f2f; border-radius: var(--radius-pill); box-shadow: var(--shadow-control); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+@keyframes overspeed-pulse { 50% { transform: scale(1.08); box-shadow: 0 0 0 8px rgb(211 47 47 / 25%); } }
+@media (prefers-reduced-motion: reduce) { .map-speed-limit.is-over { animation: none; } }

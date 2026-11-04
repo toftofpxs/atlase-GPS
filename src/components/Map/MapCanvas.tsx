@@ -28,6 +28,12 @@ import {
   type RouteControl,
 } from '../../services/routeControls'
 import { getRouteSpeedLimits, getSpeedLimitAt, type SpeedLimitSpan } from '../../services/routeSpeedLimits'
+import { playAlertBeep } from '../../services/alertSound'
+
+/** Tolérance avant l'alerte de survitesse : 5 km/h, ou 5 % au-delà de 100 km/h. */
+const getOverspeedTolerance = (limit: number) => Math.max(5, limit * 0.05)
+/** Délai minimum entre deux bips de survitesse. */
+const OVERSPEED_BEEP_COOLDOWN_MS = 30_000
 import {
   formatManeuver,
   getManeuverDirection,
@@ -82,6 +88,7 @@ export function MapCanvas() {
   const [reportError, setReportError] = useState('')
   const [routeSpeedLimits, setRouteSpeedLimits] = useState<SpeedLimitSpan[] | null>(null)
   const [speedLimitsStatus, setSpeedLimitsStatus] = useState<SpeedLimitStatus>('idle')
+  const lastOverspeedBeepRef = useRef(0)
   const [routeControls, setRouteControls] = useState<RouteControl[]>([])
   const [routeControlsStatus, setRouteControlsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [routeControlsRetry, setRouteControlsRetry] = useState(0)
@@ -125,6 +132,10 @@ export function MapCanvas() {
     routeSpeedLimits && guidance && !offRoute ? getSpeedLimitAt(routeSpeedLimits, guidance.along) : null
   const speedLimitStatus: SpeedLimitStatus =
     speedLimitsStatus === 'available' && speedLimit === null ? 'unavailable' : speedLimitsStatus
+  const currentSpeedKmh =
+    currentPosition?.speed === null || currentPosition?.speed === undefined ? null : currentPosition.speed * 3.6
+  const overspeed =
+    speedLimit !== null && currentSpeedKmh !== null && currentSpeedKmh > speedLimit + getOverspeedTolerance(speedLimit)
   // Ne change que tous les CONTROLS_REFETCH_STEP_METERS : c'est ce qui déclenche une nouvelle recherche.
   const controlsFetchFrom =
     Math.floor(routeProgress / CONTROLS_REFETCH_STEP_METERS) * CONTROLS_REFETCH_STEP_METERS
@@ -710,6 +721,15 @@ export function MapCanvas() {
     return () => controller.abort()
   }, [navigationActive, route])
 
+  // Survitesse : un bip au début de chaque dépassement (au plus un toutes les 30 s).
+  useEffect(() => {
+    if (!overspeed) return
+    const now = Date.now()
+    if (now - lastOverspeedBeepRef.current < OVERSPEED_BEEP_COOLDOWN_MS) return
+    lastOverspeedBeepRef.current = now
+    playAlertBeep()
+  }, [overspeed])
+
   useEffect(() => {
     if (navigationActive) return
 
@@ -1035,8 +1055,11 @@ export function MapCanvas() {
           </section>
 
           <section className="map-live-speeds" aria-label="Vitesses">
+            {overspeed && (
+              <span className="map-overspeed-label" role="alert">Ralentissez</span>
+            )}
             <div
-              className="map-speed-limit"
+              className={`map-speed-limit ${overspeed ? 'is-over' : ''}`}
               title={
                 speedLimitStatus === 'loading'
                   ? 'Recherche de la limitation dans OpenStreetMap'
@@ -1050,7 +1073,7 @@ export function MapCanvas() {
               <span>km/h</span>
             </div>
             <div
-              className="map-current-speed"
+              className={`map-current-speed ${overspeed ? 'is-over' : ''}`}
               aria-label={`Vitesse actuelle : ${currentPosition?.speed === null || currentPosition?.speed === undefined ? 'indisponible' : `${Math.round(currentPosition.speed * 3.6)} km/h`}`}
             >
               <strong>
