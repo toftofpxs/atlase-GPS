@@ -23,11 +23,13 @@ export function useFreeDrive(active: boolean) {
   const setNavigationError = useInterfaceStore((state) => state.setNavigationError)
   const [speedLimit, setSpeedLimit] = useState<number | null>(null)
   const [limitStatus, setLimitStatus] = useState<FreeDriveLimitStatus>('idle')
+  const [roadName, setRoadName] = useState<string | null>(null)
 
   useEffect(() => {
     if (!active) {
       setSpeedLimit(null)
       setLimitStatus('idle')
+      setRoadName(null)
       return
     }
     if (!window.isSecureContext || !navigator.geolocation) {
@@ -63,14 +65,16 @@ export function useFreeDrive(active: boolean) {
         request = current
         void fetchTraceAttributes(
           trail.map((entry) => entry.point),
-          ['edge.speed_limit'],
+          ['edge.speed_limit', 'edge.names'],
           current.signal,
           ['map_snap'],
         )
           .then((data) => {
             if (current.signal.aborted) return
             const edges = data.edges ?? []
-            const limit = edges[edges.length - 1]?.speed_limit
+            const lastEdge = edges[edges.length - 1]
+            const limit = lastEdge?.speed_limit
+            setRoadName(lastEdge?.names?.[0] ?? null)
             const valid = typeof limit === 'number' && limit > 0 && limit < 200 ? limit : null
             setSpeedLimit(valid)
             setLimitStatus(valid === null ? 'unavailable' : 'available')
@@ -95,5 +99,5 @@ export function useFreeDrive(active: boolean) {
     }
   }, [active, setCurrentPosition, setNavigationError])
 
-  return { speedLimit, limitStatus }
+  return { speedLimit, limitStatus, roadName }
 }

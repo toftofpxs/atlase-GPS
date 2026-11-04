@@ -9,20 +9,27 @@ import type {
 import {
   AlertTriangle,
   ArrowUp,
+  ArrowUpLeft,
+  ArrowUpRight,
   Car,
-  Clock3,
   CornerUpLeft,
   CornerUpRight,
+  Flag,
   Gauge,
-  Share2,
   LocateFixed,
   LoaderCircle,
-  Plus,
+  Merge,
   RotateCcw,
+  Route as RouteIcon,
+  Share2,
   Shield,
-  StopCircle,
+  Split,
+  TriangleAlert,
+  Undo2,
   X,
 } from 'lucide-react'
+import type { RouteStep } from '../../types/geocoding'
+import { getRouteGeometry } from '../../services/routeGeometry'
 import { getMapStyleUrl, MAP_WORKER_URL } from '../../services/mapConfig'
 import {
   CONTROLS_REFETCH_STEP_METERS,
@@ -46,6 +53,10 @@ import { applyDrivingMapLook, prefetchRouteTiles, PREFETCH_REFRESH_METERS } from
 import { AlongRouteSearch } from './AlongRouteSearch'
 import { LaneGuidance } from './LaneGuidance'
 
+/** « Puis » : affiché si la manœuvre suivante est à moins de cette distance de la prochaine… */
+const THEN_MAX_GAP_METERS = 150
+/** … et qu'on approche de la prochaine. */
+const THEN_SHOW_WITHIN_METERS = 600
 /** En navigation, la légende feux/STOP ne s'affiche qu'à moins de cette distance. */
 const CONTROLS_LEGEND_NEAR_METERS = 600
 /** Recentrage automatique sur la position après ce délai sans toucher la carte. */
@@ -74,7 +85,6 @@ const getOverspeedTolerance = (limit: number) => Math.max(5, limit * 0.05)
 const OVERSPEED_BEEP_COOLDOWN_MS = 30_000
 import {
   formatManeuver,
-  getManeuverDirection,
   getRemainingRouteMetrics,
   getRouteBearing,
   isOffRoute,
@@ -174,10 +184,26 @@ export function MapCanvas() {
   const resolvedThemeRef = useRef(resolvedTheme)
   resolvedThemeRef.current = resolvedTheme
   const remaining = useMemo(() => (route ? getRemainingRouteMetrics(route, guidance) : null), [route, guidance])
-  const currentStep = route?.steps[guidance?.stepIndex ?? navigationStepIndex]
-  const direction = getManeuverDirection(currentStep)
-  const DirectionIcon = getDirectionIcon(direction)
+  const stepIndexNow = guidance?.stepIndex ?? navigationStepIndex
+  const currentStep = route?.steps[stepIndexNow]
   const offRoute = currentPosition ? isOffRoute(guidance, currentPosition.accuracy) : false
+  // Bandeau : icône de la manœuvre, rue à prendre (en grand) et consigne courte.
+  const ManeuverIcon = getManeuverIcon(currentStep)
+  const arriving = currentStep?.maneuver.type === 'arrive'
+  const maneuverRoad = arriving ? destination?.name ?? '' : currentStep?.name ?? ''
+  const maneuverHint = !currentStep
+    ? ''
+    : arriving
+      ? guidance && guidance.distanceToStep > 30 ? 'Destination' : 'Vous êtes arrivé'
+      : getShortManeuver(currentStep)
+  // « Puis » : la manœuvre suivante quand elle arrive juste après celle-ci.
+  const thenCandidate = route?.steps[stepIndexNow + 1]
+  const thenStep =
+    currentStep && thenCandidate && !offRoute && guidance &&
+    currentStep.distance <= THEN_MAX_GAP_METERS && guidance.distanceToStep <= THEN_SHOW_WITHIN_METERS
+      ? thenCandidate
+      : null
+  const ThenIcon = thenStep ? getManeuverIcon(thenStep) : null
 
   // Distance parcourue sur le trajet. Si l'utilisateur est loin du trajet
   // (aperçu avant le départ, écart GPS), on garde la dernière valeur connue.
@@ -186,6 +212,10 @@ export function MapCanvas() {
   const routeProgress = guidance && guidance.distanceFromRoute <= 100 ? guidance.along : previousProgress
   routeProgressRef.current = { route, along: routeProgress }
   const freeDrive = useFreeDrive(freeDriveActive)
+  // Rue sur laquelle on roule (étiquette en bas de la carte).
+  const currentRoadName = navigationActive
+    ? offRoute ? '' : route?.steps[stepIndexNow - 1]?.name ?? ''
+    : freeDriveActive ? freeDrive.roadName ?? '' : ''
   const routeSpeedLimit =
     routeSpeedLimits && guidance && !offRoute ? getSpeedLimitAt(routeSpeedLimits, guidance.along) : null
   // Sans itinéraire, la limitation vient du recalage des derniers points GPS.
@@ -248,7 +278,10 @@ export function MapCanvas() {
 
         const handleLoad = () => setStatus('ready')
         const handleStyleLoad = () => setStatus('ready')
-        const handleError = (event: ErrorEvent) => {
+        const handleError = (event: ErrorEvent & { sourceId?: string; tile?: unknown }) => {
+          // Une tuile qui échoue (tunnel, réseau faible) ne doit pas masquer toute la carte :
+          // seules les erreurs du style lui-même sont bloquantes. Les tuiles manquantes se rechargent seules.
+          if (event.sourceId || event.tile) return
           if (!instance.isStyleLoaded()) {
             setErrorMessage(event.error.message)
             setStatus('error')
@@ -1019,6 +1052,68 @@ export function MapCanvas() {
     return () => window.clearTimeout(timer)
   }, [navigationActive, offlineMapEnabled, prefetchStep, route, status])
 
+  // Aperçu : tout le trajet restant à l'écran, carte à plat et nord en haut.
+  // Le recentrage automatique ramène ensuite la vue sur la voiture.
+  const showRouteOverview = () => {
+    const map = mapRef.current
+    if (!map || !route) return
+    haptic('tap')
+    cameraFollowRef.current = null
+    cameraCatchUpRef.current = null
+    setFollowingPosition(false)
+    const { cumulative } = getRouteGeometry(route.coordinates)
+    const remainingPoints = route.coordinates.filter((_, index) => cumulative[index] >= routeProgress)
+    const points = currentPosition ? [currentPosition.coordinates, ...remainingPoints] : remainingPoints
+    if (points.length === 0) return
+    let [west, south] = points[0]
+    let [east, north] = points[0]
+    for (const [longitude, latitude] of points) {
+      west = Math.min(west, longitude)
+      east = Math.max(east, longitude)
+      south = Math.min(south, latitude)
+      north = Math.max(north, latitude)
+    }
+    const height = map.getContainer().clientHeight
+    map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 })
+    map.fitBounds(
+      [[west, south], [east, north]],
+      {
+        padding: { top: Math.round(height * 0.22), bottom: Math.round(height * 0.24), left: 48, right: 48 },
+        pitch: 0,
+        bearing: 0,
+        maxZoom: 16,
+        duration: 900,
+        essential: true,
+      },
+    )
+  }
+
+  // Étiquette de la rue à prendre, posée sur la carte à l'endroit de la manœuvre.
+  const maneuverLabelRef = useRef<MapLibreMarker | null>(null)
+  const maneuverLabelText = navigationActive && !offRoute && currentStep && !arriving ? currentStep.name : ''
+  const [maneuverLongitude, maneuverLatitude] = currentStep?.maneuver.location ?? [Number.NaN, Number.NaN]
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map || !maneuverLabelText || !Number.isFinite(maneuverLongitude)) return
+
+    let disposed = false
+    void import('maplibre-gl').then(({ Marker }) => {
+      if (disposed || mapRef.current !== map) return
+      const element = document.createElement('div')
+      element.className = 'nav-maneuver-label'
+      element.textContent = maneuverLabelText
+      element.setAttribute('aria-hidden', 'true')
+      maneuverLabelRef.current = new Marker({ element, anchor: 'bottom-left', offset: [8, -8] })
+        .setLngLat([maneuverLongitude, maneuverLatitude])
+        .addTo(map)
+    })
+    return () => {
+      disposed = true
+      maneuverLabelRef.current?.remove()
+      maneuverLabelRef.current = null
+    }
+  }, [maneuverLabelText, maneuverLatitude, maneuverLongitude, status])
+
   const shareArrival = async () => {
     if (!remaining) return
     haptic('tap')
@@ -1194,7 +1289,8 @@ export function MapCanvas() {
     const wasFollowing = cameraFollowRef.current !== null
     cameraFollowRef.current = {
       pitch: mapViewportMobile ? 55 : 58,
-      paddingTop: Math.round(map.getContainer().clientHeight * (mapViewportMobile ? 0.24 : 0.32)),
+      // Voiture vers le bas de l'écran (≈ 68 % de la hauteur sur téléphone) : on voit loin devant.
+      paddingTop: Math.round(map.getContainer().clientHeight * (mapViewportMobile ? 0.36 : 0.32)),
     }
     if (!wasFollowing) {
       map.stop()
@@ -1249,7 +1345,8 @@ export function MapCanvas() {
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
               'line-color': isDarkMapStyle ? '#1c222b' : '#fafaf8',
-              'line-width': ['case', ['get', 'selected'], 10, 7],
+              // Tracé épais en vue rapprochée (lisible d'un coup d'œil en conduisant), fin en vue d'ensemble.
+              'line-width': ['interpolate', ['linear'], ['zoom'], 10, ['case', ['get', 'selected'], 7, 5], 15, ['case', ['get', 'selected'], 12, 7], 18, ['case', ['get', 'selected'], 22, 10]],
               'line-opacity': 1,
             },
           },
@@ -1266,7 +1363,7 @@ export function MapCanvas() {
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
               'line-color': ['case', ['get', 'selected'], isDarkMapStyle ? '#8ab4f8' : '#1a73e8', '#9da3aa'],
-              'line-width': ['case', ['get', 'selected'], 7, 5],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 10, ['case', ['get', 'selected'], 4, 3], 15, ['case', ['get', 'selected'], 8, 4], 18, ['case', ['get', 'selected'], 16, 7]],
               'line-opacity': ['case', ['get', 'selected'], 1, 0.8],
             },
           },
@@ -1304,6 +1401,56 @@ export function MapCanvas() {
     }
   }, [isDarkMapStyle, mapViewportMobile, route, routeOptions, selectedRouteIndex, status])
 
+  // Légende feux/STOP : sous le bandeau en navigation, dans un coin de la carte sinon.
+  const controlsLegend = route && routeControlsStatus !== 'idle' && (!navigationActive || controlsNearby) ? (
+    <div className="route-controls-legend" role="status" aria-live="polite">
+      {routeControlsStatus === 'loading' && upcomingControls.length === 0 ? (
+        <><LoaderCircle size={14} className="route-button-spinner" /> Recherche des feux et STOP à proximité…</>
+      ) : routeControlsStatus === 'error' && upcomingControls.length === 0 ? (
+        <>
+          <span>Panneaux et feux indisponibles</span>
+          <button
+            type="button"
+            className="route-controls-retry"
+            onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
+          >
+            Réessayer
+          </button>
+        </>
+      ) : upcomingControls.length === 0 && !routeControlsPartial ? (
+        'Aucun feu ni STOP à proximité'
+      ) : (
+        <>
+          {nextLight && (
+            <span>
+              <i className="route-controls-light-key" aria-hidden="true"><span /><span /><span /></i>
+              Feu dans {formatDistance(Math.max(0, nextLight.distanceAlongRoute - routeProgress))}
+            </span>
+          )}
+          {nextStop && (
+            <span>
+              <i className="route-controls-stop-key">STOP</i>
+              STOP dans {formatDistance(Math.max(0, nextStop.distanceAlongRoute - routeProgress))}
+            </span>
+          )}
+          {routeControlsPartial && (
+            <span className="route-controls-partial">
+              {routeControlsPartial === 'stops' ? 'STOP indisponibles' : 'Feux indisponibles'}
+              <button
+                type="button"
+                className="route-controls-retry"
+                onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
+              >
+                Réessayer
+              </button>
+            </span>
+          )}
+          <small>Données OpenStreetMap, non exhaustives</small>
+        </>
+      )}
+    </div>
+  ) : null
+
   return (
     <section
       className={`map-canvas ${drivingActive ? 'map-navigation-active' : ''} ${upcomingLanes ? 'has-lanes' : ''}`}
@@ -1317,130 +1464,59 @@ export function MapCanvas() {
           {trafficStatus === 'error' && 'Trafic indisponible'}
         </div>
       )}
-      {route && routeControlsStatus !== 'idle' && (!navigationActive || controlsNearby) && (
-        <div className="route-controls-legend" role="status" aria-live="polite">
-          {routeControlsStatus === 'loading' && upcomingControls.length === 0 ? (
-            <><LoaderCircle size={14} className="route-button-spinner" /> Recherche des feux et STOP à proximité…</>
-          ) : routeControlsStatus === 'error' && upcomingControls.length === 0 ? (
-            <>
-              <span>Panneaux et feux indisponibles</span>
-              <button
-                type="button"
-                className="route-controls-retry"
-                onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
-              >
-                Réessayer
-              </button>
-            </>
-          ) : upcomingControls.length === 0 && !routeControlsPartial ? (
-            'Aucun feu ni STOP à proximité'
-          ) : (
-            <>
-              {nextLight && (
-                <span>
-                  <i className="route-controls-light-key" aria-hidden="true"><span /><span /><span /></i>
-                  Feu dans {formatDistance(Math.max(0, nextLight.distanceAlongRoute - routeProgress))}
-                </span>
-              )}
-              {nextStop && (
-                <span>
-                  <i className="route-controls-stop-key">STOP</i>
-                  STOP dans {formatDistance(Math.max(0, nextStop.distanceAlongRoute - routeProgress))}
-                </span>
-              )}
-              {routeControlsPartial && (
-                <span className="route-controls-partial">
-                  {routeControlsPartial === 'stops' ? 'STOP indisponibles' : 'Feux indisponibles'}
-                  <button
-                    type="button"
-                    className="route-controls-retry"
-                    onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
-                  >
-                    Réessayer
-                  </button>
-                </span>
-              )}
-              <small>Données OpenStreetMap, non exhaustives</small>
-            </>
-          )}
-        </div>
-      )}
+      {!navigationActive && controlsLegend}
       {navigationActive && route && (
         <>
-          <section className="map-navigation-instruction" aria-label="Prochaine direction">
-            {navigationError ? (
-              <p className="map-navigation-message map-navigation-error" role="alert">
-                {navigationError}
-              </p>
-            ) : !currentPosition ? (
-              <p className="map-navigation-message" role="status">
-                <LoaderCircle size={16} className="route-button-spinner" />
-                Recherche de votre position GPS…
-              </p>
-            ) : navigationRerouting ? (
-              <p className="map-navigation-message" role="status">
-                <LoaderCircle size={16} className="route-button-spinner" /> Recalcul de l’itinéraire…
-              </p>
-            ) : offRoute && guidance ? (
-              <p className="map-navigation-message map-navigation-error" role="status">
-                Vous êtes à {formatDistance(guidance.distanceFromRoute)} de l’itinéraire.
-              </p>
-            ) : guidance && currentStep ? (
-              <>
-                <span className="map-navigation-turn-icon"><DirectionIcon size={21} strokeWidth={2.6} /></span>
-                <span className="map-navigation-turn-copy">
-                  <strong>{formatDistance(guidance.distanceToStep)}</strong>
-                  <span>
-                    {currentStep.maneuver.type === 'arrive' && guidance.distanceToStep > 30
-                      ? `Continuez jusqu’à ${destination?.name ?? 'destination'}.`
-                      : formatManeuver(currentStep)}
+          {/* Bandeau de guidage : flèche + distance, rue à prendre, puis les voies dans le même bloc. */}
+          <div className="nav-top">
+            <section className="nav-banner" aria-label="Prochaine direction">
+              {navigationError ? (
+                <p className="nav-banner-message" role="alert">{navigationError}</p>
+              ) : !currentPosition ? (
+                <p className="nav-banner-message" role="status">
+                  <LoaderCircle size={18} className="route-button-spinner" />
+                  Recherche de votre position GPS…
+                </p>
+              ) : navigationRerouting ? (
+                <p className="nav-banner-message" role="status">
+                  <LoaderCircle size={18} className="route-button-spinner" /> Recalcul de l’itinéraire…
+                </p>
+              ) : offRoute && guidance ? (
+                <p className="nav-banner-message" role="status">
+                  Vous êtes à {formatDistance(guidance.distanceFromRoute)} de l’itinéraire.
+                </p>
+              ) : guidance && currentStep ? (
+                <div className="nav-banner-main">
+                  <span className="nav-banner-turn">
+                    <ManeuverIcon size={40} strokeWidth={2.8} aria-hidden="true" />
+                    <span className="nav-banner-distance">
+                      {formatDistanceParts(guidance.distanceToStep).value}
+                      <small>{formatDistanceParts(guidance.distanceToStep).unit}</small>
+                    </span>
                   </span>
-                </span>
-              </>
-            ) : null}
-            {upcomingLanes && (
-              <LaneGuidance lanes={upcomingLanes.guide.lanes} distance={formatDistance(upcomingLanes.distance)} />
-            )}
-          </section>
+                  <span className="nav-banner-copy">
+                    {maneuverRoad && <span className="nav-banner-hint">{maneuverHint}</span>}
+                    <strong>{maneuverRoad || maneuverHint}</strong>
+                  </span>
+                </div>
+              ) : null}
+              {upcomingLanes && !offRoute && (
+                <LaneGuidance lanes={upcomingLanes.guide.lanes} distance={formatDistance(upcomingLanes.distance)} />
+              )}
+            </section>
+            <div className="nav-top-under">
+              {thenStep && ThenIcon && (
+                <div className="nav-then" aria-label={`Puis ${getShortManeuver(thenStep).toLocaleLowerCase('fr-FR')}`}>
+                  <span>Puis</span>
+                  <ThenIcon size={20} strokeWidth={2.8} aria-hidden="true" />
+                </div>
+              )}
+              {controlsLegend}
+            </div>
+          </div>
 
-          <div className="route-report-tools">
-            <button
-              type="button"
-              className={`route-report-toggle ${reportMenuOpen ? 'route-report-toggle-active' : ''}`}
-              aria-label={reportMenuOpen ? 'Fermer les signalements' : 'Ajouter un signalement sur la route'}
-              aria-expanded={reportMenuOpen}
-              title="Ajouter un signalement"
-              onClick={() => {
-                haptic('tap')
-                setReportMode(null)
-                setReportMenuOpen((isOpen) => !isOpen)
-              }}
-            >
-              {reportMenuOpen ? <X size={22} /> : <Plus size={24} />}
-            </button>
-            {reportMenuOpen && (
-              <div className="route-report-menu" aria-label="Type de signalement">
-                {([
-                  { type: 'traffic', label: 'Bouchon', Icon: Car },
-                  { type: 'police', label: 'Police', Icon: Shield },
-                  { type: 'obstacle', label: 'Objet sur la route', Icon: AlertTriangle },
-                  { type: 'danger', label: 'Danger', Icon: AlertTriangle },
-                ] as const).map(({ type, label, Icon }) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => {
-                      haptic('tap')
-                      setReportMode(type)
-                      setReportMenuOpen(false)
-                    }}
-                  >
-                    <Icon size={20} />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* Boutons ronds à droite, au-dessus de la feuille du bas. */}
+          <div className="nav-fabs">
             <AlongRouteSearch
               map={mapRef.current}
               mapReady={status === 'ready'}
@@ -1450,6 +1526,45 @@ export function MapCanvas() {
                 if (open) setReportMenuOpen(false)
               }}
             />
+            <div className="nav-report">
+              <button
+                type="button"
+                className={`nav-fab nav-fab-report ${reportMenuOpen ? 'is-active' : ''}`}
+                aria-label={reportMenuOpen ? 'Fermer les signalements' : 'Ajouter un signalement sur la route'}
+                aria-expanded={reportMenuOpen}
+                title="Signaler"
+                onClick={() => {
+                  haptic('tap')
+                  setReportMode(null)
+                  setReportMenuOpen((isOpen) => !isOpen)
+                }}
+              >
+                {reportMenuOpen ? <X size={24} /> : <TriangleAlert size={24} />}
+              </button>
+              {reportMenuOpen && (
+                <div className="route-report-menu" aria-label="Type de signalement">
+                  {([
+                    { type: 'traffic', label: 'Bouchon', Icon: Car },
+                    { type: 'police', label: 'Police', Icon: Shield },
+                    { type: 'obstacle', label: 'Objet sur la route', Icon: AlertTriangle },
+                    { type: 'danger', label: 'Danger', Icon: AlertTriangle },
+                  ] as const).map(({ type, label, Icon }) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        haptic('tap')
+                        setReportMode(type)
+                        setReportMenuOpen(false)
+                      }}
+                    >
+                      <Icon size={20} />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {reportMode && (
@@ -1463,36 +1578,45 @@ export function MapCanvas() {
           {reportError && <p className="route-report-error" role="alert">{reportError}</p>}
           {shareFeedback && <p className="map-share-feedback" role="status">{shareFeedback}</p>}
 
-          <section className="map-navigation-dashboard" aria-label="Résumé de navigation">
+          {/* Feuille du bas : temps restant en grand, distance et heure d'arrivée, aperçu, quitter. */}
+          <section className="nav-sheet" aria-label="Résumé de navigation">
+            <span className="nav-sheet-grip" aria-hidden="true" />
             <button
               type="button"
-              className="map-navigation-metric map-navigation-share"
+              className="nav-sheet-summary"
               onClick={() => void shareArrival()}
               disabled={!remaining}
-              aria-label={`Arrivée estimée ${remaining ? formatArrivalTime(remaining.duration) : 'inconnue'}. Partager l’heure d’arrivée`}
+              aria-label={
+                remaining
+                  ? `${formatDuration(remaining.duration)} restantes, ${formatDistance(remaining.distance)}, arrivée à ${formatArrivalTime(remaining.duration)}. Partager l’heure d’arrivée`
+                  : 'Temps restant inconnu'
+              }
             >
-              <span>Arrivée estimée <Share2 size={11} aria-hidden="true" /></span>
-              <strong>{remaining ? formatArrivalTime(remaining.duration) : '—'}</strong>
+              <strong>{remaining ? formatDuration(remaining.duration) : '—'}</strong>
+              <span>
+                {remaining ? `${formatDistance(remaining.distance)} · ${formatArrivalTime(remaining.duration)}` : 'Calcul en cours'}
+                <Share2 size={13} aria-hidden="true" />
+              </span>
             </button>
-            <div className="map-navigation-metric">
-              <span><Clock3 size={11} />Durée · distance</span>
-              <strong>{remaining ? `${formatDuration(remaining.duration)} · ${formatDistance(remaining.distance)}` : '—'}</strong>
-            </div>
-            <div className="map-navigation-direction" aria-label={`Direction : ${getDirectionLabel(direction)}`}>
-              <DirectionIcon size={25} strokeWidth={2.6} />
-            </div>
             <button
               type="button"
-              className="map-navigation-stop"
+              className="nav-sheet-round"
+              onClick={showRouteOverview}
+              aria-label="Aperçu du trajet restant"
+              title="Aperçu du trajet"
+            >
+              <RouteIcon size={22} />
+            </button>
+            <button
+              type="button"
+              className="nav-sheet-quit"
               onClick={() => {
                 haptic('tap')
                 setStopConfirmOpen(true)
               }}
-              aria-label="Arrêter la navigation"
               aria-haspopup="dialog"
-              title="Arrêter"
             >
-              <StopCircle size={22} />
+              Quitter
             </button>
           </section>
           {stopConfirmOpen && (
@@ -1528,12 +1652,10 @@ export function MapCanvas() {
       )}
       {drivingActive && (
         <>
-          <section className="map-live-speeds" aria-label="Vitesses">
-            {overspeed && (
-              <span className="map-overspeed-label" role="alert">Ralentissez</span>
-            )}
+          {/* Vitesses en bas à gauche : panneau de limitation + vitesse actuelle. */}
+          <section className={`nav-speed ${overspeed ? 'is-over' : ''}`} aria-label="Vitesses">
             <div
-              className={`map-speed-limit ${overspeed ? 'is-over' : ''}`}
+              className="nav-speed-limit"
               title={
                 speedLimitStatus === 'loading'
                   ? 'Recherche de la limitation dans OpenStreetMap'
@@ -1543,34 +1665,30 @@ export function MapCanvas() {
               }
               aria-label={`Limitation de vitesse : ${speedLimit ?? 'inconnue'} km/h`}
             >
-              <strong>{speedLimit ?? '—'}</strong>
-              <span>km/h</span>
+              {speedLimit ?? '—'}
             </div>
             <div
-              className={`map-current-speed ${overspeed ? 'is-over' : ''}`}
-              aria-label={`Vitesse actuelle : ${currentPosition?.speed === null || currentPosition?.speed === undefined ? 'indisponible' : `${Math.round(currentPosition.speed * 3.6)} km/h`}`}
+              className="nav-speed-current"
+              aria-label={`Vitesse actuelle : ${currentSpeedKmh === null ? 'indisponible' : `${Math.round(currentSpeedKmh)} km/h`}`}
             >
-              <strong>
-                {currentPosition?.speed === null || currentPosition?.speed === undefined
-                  ? '—'
-                  : Math.round(currentPosition.speed * 3.6)}
-              </strong>
+              <strong>{currentSpeedKmh === null ? '--' : Math.round(currentSpeedKmh)}</strong>
               <span>km/h</span>
             </div>
+            {overspeed && <span className="nav-speed-alert" role="alert">Ralentissez</span>}
           </section>
-          {currentPosition && !followingPosition && (
+
+          {currentPosition && !followingPosition ? (
             <button
               type="button"
-              className="map-recenter-button"
+              className="nav-recenter"
               onClick={() => {
                 haptic('tap')
                 setRecenterCountdownStart(null)
                 setFollowingPosition(true)
               }}
               aria-label="Recentrer la carte sur ma position"
-              title="Recentrer sur ma position"
             >
-              <LocateFixed size={22} />
+              <LocateFixed size={20} />
               <span>Recentrer</span>
               {recenterCountdownStart !== null && (
                 <span
@@ -1581,13 +1699,19 @@ export function MapCanvas() {
                 />
               )}
             </button>
+          ) : (
+            currentRoadName && (
+              <div className="nav-road-label" aria-label={`Vous êtes sur ${currentRoadName}`}>
+                {currentRoadName}
+              </div>
+            )
           )}
         </>
       )}
       {freeDriveActive && (
-        <section className="map-free-drive-bar" aria-label="Conduite libre">
-          <span className="map-free-drive-icon" aria-hidden="true"><Gauge size={22} /></span>
-          <span className="map-free-drive-copy">
+        <section className="nav-sheet nav-sheet-free" aria-label="Conduite libre">
+          <span className="nav-sheet-grip" aria-hidden="true" />
+          <div className="nav-sheet-summary">
             <strong>Conduite libre</strong>
             <span>
               {navigationError
@@ -1600,18 +1724,16 @@ export function MapCanvas() {
                       ? 'Limitation inconnue sur cette route'
                       : 'Vitesse et limitation en direct'}
             </span>
-          </span>
+          </div>
           <button
             type="button"
-            className="map-free-drive-stop"
+            className="nav-sheet-quit"
             onClick={() => {
               haptic('confirm')
               stopFreeDrive()
             }}
-            aria-label="Arrêter la conduite libre"
           >
-            <StopCircle size={22} />
-            <span>Arrêter</span>
+            Quitter
           </button>
         </section>
       )}
@@ -1657,32 +1779,46 @@ export function MapCanvas() {
   )
 }
 
-function getDirectionIcon(direction: ReturnType<typeof getManeuverDirection>) {
-  switch (direction) {
+/** Icône de manœuvre plus précise que gauche/droite : légèrement, bifurcation, arrivée… */
+function getManeuverIcon(step: RouteStep | undefined) {
+  if (!step) return ArrowUp
+  const { type, modifier } = step.maneuver
+  if (type === 'arrive') return Flag
+  if (type === 'roundabout' || type === 'rotary' || type === 'roundabout turn' || type === 'exit rotary') return RotateCcw
+  if (modifier === 'uturn') return Undo2
+  if (type === 'fork') return Split
+  if (type === 'merge') return Merge
+  switch (modifier) {
+    case 'slight left':
+      return ArrowUpLeft
+    case 'slight right':
+      return ArrowUpRight
     case 'left':
+    case 'sharp left':
       return CornerUpLeft
     case 'right':
+    case 'sharp right':
       return CornerUpRight
-    case 'uturn':
-    case 'roundabout':
-      return RotateCcw
     default:
       return ArrowUp
   }
 }
 
-function getDirectionLabel(direction: ReturnType<typeof getManeuverDirection>): string {
-  switch (direction) {
-    case 'left':
-      return 'à gauche'
-    case 'right':
-      return 'à droite'
-    case 'uturn':
-      return 'demi-tour'
-    case 'roundabout':
-      return 'rond-point'
-    default:
-      return 'tout droit'
+/** Consigne courte, sans le nom de rue (affiché en grand à côté) : « Tournez à gauche ». */
+function getShortManeuver(step: RouteStep): string {
+  return formatManeuver({ ...step, name: '' }).replace(/\.$/, '')
+}
+
+/** Distance en deux parties pour le bandeau : « 40 » en grand, « m » en petit. */
+function formatDistanceParts(distance: number): { value: string; unit: string } {
+  if (distance < 1000) {
+    // Arrondi au pas de 10 m au-delà de 100 m (comme les GPS) : moins de chiffres qui défilent.
+    const rounded = distance < 100 ? Math.round(distance) : Math.round(distance / 10) * 10
+    return { value: String(rounded), unit: 'm' }
+  }
+  return {
+    value: new Intl.NumberFormat('fr-FR', { maximumFractionDigits: distance < 10_000 ? 1 : 0 }).format(distance / 1000),
+    unit: 'km',
   }
 }
 

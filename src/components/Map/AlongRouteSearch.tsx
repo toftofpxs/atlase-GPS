@@ -150,7 +150,7 @@ export function AlongRouteSearch({ map, mapReady, along, onOpenChange }: AlongRo
     <>
       <button
         type="button"
-        className={`route-report-toggle along-route-toggle ${open ? 'route-report-toggle-active' : ''}`}
+        className={`nav-fab ${open ? 'is-active' : ''}`}
         aria-label={open ? 'Fermer la recherche sur le trajet' : 'Chercher sur le trajet (carburant, recharge, parking, aire)'}
         aria-expanded={open}
         title="Sur le trajet"
@@ -159,7 +159,7 @@ export function AlongRouteSearch({ map, mapReady, along, onOpenChange }: AlongRo
           setPanelOpen(!open)
         }}
       >
-        {open ? <X size={22} /> : <Search size={22} />}
+        {open ? <X size={24} /> : <Search size={24} />}
       </button>
 
       {open && createPortal(

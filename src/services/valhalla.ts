@@ -14,6 +14,8 @@ export interface ValhallaTraceEdge {
   begin_shape_index?: number
   end_shape_index?: number
   speed_limit?: number
+  /** Noms de la route (attribut edge.names). */
+  names?: string[]
   traffic_signal?: boolean
   end_node?: { traffic_signal?: boolean }
 }
