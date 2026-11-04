@@ -240,6 +240,11 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .map-provider-badge { display: none; }
 .map-provider-badge > span:not(.preview-dot) { color: var(--color-muted); }
 .preview-dot { width: 6px; height: 6px; border-radius: 50%; background: #188038; }
+.route-controls-legend { position: absolute; bottom: 12px; left: 12px; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 8px 10px; color: var(--color-text); background: var(--color-surface-raised); border: 1px solid var(--color-line); border-radius: 10px; box-shadow: var(--shadow-control); font-size: 11px; }
+.route-controls-legend > span { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.route-controls-legend small { flex-basis: 100%; color: var(--color-muted); font-size: 9px; }
+.route-controls-stop-key { display: grid; width: 25px; height: 25px; place-items: center; color: #fff; background: #d71920; border: 2px solid #fff; outline: 1px solid #d71920; clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%); font-size: 6px; font-style: normal; font-weight: 800; }
+.route-controls-light-key { width: 10px; height: 25px; background: #252a31; border: 2px solid #101318; border-radius: 5px; box-shadow: inset 0 5px #ed2424, inset 0 -5px #32a852; }
 .destination-marker { position: relative; width: 22px; height: 22px; background: var(--color-accent); border: 2px solid var(--color-surface-raised); border-radius: 50% 50% 50% 4px; box-shadow: var(--shadow-control); transform: rotate(-45deg); }
 .destination-marker::after { position: absolute; top: 6px; left: 6px; width: 6px; height: 6px; content: ''; background: var(--color-surface-raised); border-radius: 50%; }
 .origin-marker, .waypoint-marker { background: var(--color-accent); }
@@ -251,6 +256,13 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .saved-place-marker-work { background: #1d4ed8; }
 .saved-place-marker-school { background: #15803d; }
 .saved-place-marker-favorite { color: #3f3300; background: #facc15; }
+.route-control-marker { display: grid; place-items: center; filter: drop-shadow(0 1px 3px rgb(0 0 0 / 45%)); }
+.route-control-marker-stop { width: 34px; height: 34px; color: #fff; background: #e11d25; border: 3px solid #fff; outline: 2px solid #c81018; clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%); font-size: 8px; font-weight: 800; }
+.route-control-marker-traffic-light { width: 20px; gap: 2px; padding: 3px; background: #222831; border: 2px solid #101318; border-radius: 8px; }
+.route-control-light { width: 9px; height: 9px; border-radius: 50%; background: #414750; box-shadow: inset 0 0 2px rgb(0 0 0 / 80%); }
+.route-control-light-red { background: #f02929; box-shadow: 0 0 5px rgb(240 41 41 / 65%); }
+.route-control-light-amber { background: #f6b51c; }
+.route-control-light-green { background: #24a148; }
 .map-navigation-active .map-provider-badge, .map-navigation-active .destination-marker { display: none; }
 .current-position-marker { position: relative; width: 28px; height: 28px; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
 .current-position-marker::before, .current-position-marker::after { display: none; }
@@ -438,6 +450,8 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .map-canvas.map-navigation-active .maplibregl-ctrl-bottom-right .maplibregl-ctrl { float: none; }
   .map-canvas.map-navigation-active .maplibregl-ctrl-bottom-left { display: none; }
   .map-canvas.map-navigation-active .maplibregl-ctrl-top-right { top: 100px; right: 12px; }
+  .route-controls-legend { top: 12px; right: 56px; bottom: auto; left: 12px; width: fit-content; max-width: calc(100% - 80px); }
+  .map-canvas.map-navigation-active .route-controls-legend { top: 100px; }
   .route-empty { min-height: 120px; }
   .map-provider-badge { top: 12px; left: 12px; }
   .map-canvas:not(.map-navigation-active) .maplibregl-ctrl-bottom-right {

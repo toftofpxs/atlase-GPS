@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react'
 import { getMapStyleUrl, MAP_WORKER_URL } from '../../services/mapConfig'
+import { getRouteControls, type RouteControl } from '../../services/routeControls'
 import { getSpeedLimit } from '../../services/speedLimit'
 import {
   formatManeuver,
@@ -48,6 +49,7 @@ export function MapCanvas() {
   const markerRef = useRef<MapLibreMarker[]>([])
   const waypointMarkerRefs = useRef<MapLibreMarker[]>([])
   const favoriteMarkerRefs = useRef<Map<string, MapLibreMarker>>(new Map())
+  const routeControlMarkerRefs = useRef<Map<string, MapLibreMarker>>(new Map())
   const currentPositionMarkerRef = useRef<MapLibreMarker | null>(null)
   const routeReportMarkerRefs = useRef(new Map<string, MapLibreMarker>())
   const speedLimitRequestRef = useRef<AbortController | null>(null)
@@ -64,6 +66,8 @@ export function MapCanvas() {
   const [reportError, setReportError] = useState('')
   const [speedLimit, setSpeedLimit] = useState<number | null>(null)
   const [speedLimitStatus, setSpeedLimitStatus] = useState<SpeedLimitStatus>('idle')
+  const [routeControls, setRouteControls] = useState<RouteControl[]>([])
+  const [routeControlsStatus, setRouteControlsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
   const destination = useInterfaceStore((state) => state.destination)
@@ -171,6 +175,8 @@ export function MapCanvas() {
       waypointMarkerRefs.current = []
       favoriteMarkerRefs.current.forEach((marker) => marker.remove())
       favoriteMarkerRefs.current.clear()
+      routeControlMarkerRefs.current.forEach((marker) => marker.remove())
+      routeControlMarkerRefs.current.clear()
       currentPositionMarkerRef.current?.remove()
       currentPositionMarkerRef.current = null
       routeReportMarkerRefs.current.forEach((marker) => marker.remove())
@@ -320,6 +326,87 @@ export function MapCanvas() {
       favoriteMarkerRefs.current.clear()
     }
   }, [favorites, status])
+
+  useEffect(() => {
+    if (status !== 'ready' || !route) {
+      setRouteControls([])
+      setRouteControlsStatus('idle')
+      return
+    }
+
+    const controller = new AbortController()
+    let timedOut = false
+    setRouteControls([])
+    setRouteControlsStatus('loading')
+    const timeout = window.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, 35_000)
+    void getRouteControls(route, controller.signal)
+      .then((controls) => {
+        if (controller.signal.aborted) return
+        setRouteControls(controls)
+        setRouteControlsStatus('ready')
+      })
+      .catch(() => {
+        if (timedOut || !controller.signal.aborted) {
+          setRouteControls([])
+          setRouteControlsStatus('error')
+        }
+      })
+      .finally(() => window.clearTimeout(timeout))
+
+    return () => {
+      window.clearTimeout(timeout)
+      controller.abort()
+    }
+  }, [route, status])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map) return
+
+    routeControlMarkerRefs.current.forEach((marker) => marker.remove())
+    routeControlMarkerRefs.current.clear()
+    if (routeControls.length === 0) return
+
+    let disposed = false
+    void import('maplibre-gl').then(({ Marker }) => {
+      if (disposed || mapRef.current !== map) return
+
+      for (const control of routeControls) {
+        const element = document.createElement('div')
+        element.className = `route-control-marker route-control-marker-${control.type}`
+        element.setAttribute('role', 'img')
+        element.setAttribute(
+          'aria-label',
+          control.type === 'stop' ? 'Panneau STOP sur le trajet' : 'Feu rouge sur le trajet',
+        )
+        if (control.type === 'stop') {
+          element.textContent = 'STOP'
+        } else {
+          for (const color of ['red', 'amber', 'green']) {
+            const light = document.createElement('span')
+            light.className = `route-control-light route-control-light-${color}`
+            light.setAttribute('aria-hidden', 'true')
+            element.append(light)
+          }
+        }
+        const marker = new Marker({ element, anchor: 'center' })
+          .setLngLat(control.coordinates)
+          .addTo(map)
+        routeControlMarkerRefs.current.set(control.id, marker)
+      }
+    }).catch(() => {
+      if (!disposed) setRouteControlsStatus('error')
+    })
+
+    return () => {
+      disposed = true
+      routeControlMarkerRefs.current.forEach((marker) => marker.remove())
+      routeControlMarkerRefs.current.clear()
+    }
+  }, [routeControls, status])
 
   useEffect(() => {
     const map = mapRef.current
@@ -693,6 +780,27 @@ export function MapCanvas() {
       aria-label={navigationActive ? 'Carte de navigation en perspective' : 'Carte interactive'}
     >
       <div className="map-host" ref={mapContainerRef} />
+      {route && routeControlsStatus !== 'idle' && (
+        <div className="route-controls-legend" role="status" aria-live="polite">
+          {routeControlsStatus === 'loading' ? (
+            <><LoaderCircle size={14} className="route-button-spinner" /> Recherche des panneaux et feux…</>
+          ) : routeControlsStatus === 'error' ? (
+            'Panneaux et feux indisponibles'
+          ) : routeControls.length === 0 ? (
+            'Aucun panneau ou feu répertorié sur ce trajet'
+          ) : (
+            <>
+              {routeControls.some((control) => control.type === 'stop') && (
+                <span><i className="route-controls-stop-key">STOP</i>{routeControls.filter((control) => control.type === 'stop').length} STOP</span>
+              )}
+              {routeControls.some((control) => control.type === 'traffic-light') && (
+                <span><i className="route-controls-light-key" />{routeControls.filter((control) => control.type === 'traffic-light').length} feux</span>
+              )}
+              <small>Données OpenStreetMap, non exhaustives</small>
+            </>
+          )}
+        </div>
+      )}
       {navigationActive && route && (
         <>
           <section className="map-navigation-instruction" aria-label="Prochaine direction">
