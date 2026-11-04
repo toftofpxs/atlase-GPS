@@ -3,6 +3,7 @@ import type {
   ErrorEvent,
   Map as MapLibreMap,
   MapMouseEvent,
+  MapTouchEvent,
   Marker as MapLibreMarker,
 } from 'maplibre-gl'
 import {
@@ -12,6 +13,8 @@ import {
   Clock3,
   CornerUpLeft,
   CornerUpRight,
+  Gauge,
+  Share2,
   LocateFixed,
   LoaderCircle,
   Plus,
@@ -29,8 +32,41 @@ import {
 } from '../../services/routeControls'
 import { getRouteSpeedLimits, getSpeedLimitAt, type SpeedLimitSpan } from '../../services/routeSpeedLimits'
 import { getRouteLanes, getUpcomingLanes, type LaneGuide } from '../../services/routeLanes'
-import { playAlertBeep } from '../../services/alertSound'
+import { playAlertBeep, unlockAlertSound } from '../../services/alertSound'
+import {
+  createMotionState,
+  getAngleDelta,
+  getDrivingZoom,
+  getMotionFrame,
+  type MotionState,
+} from '../../services/positionMotion'
+import { haptic } from '../../services/haptics'
+import { useFreeDrive } from '../../hooks/useFreeDrive'
+import { applyDrivingMapLook, prefetchRouteTiles, PREFETCH_REFRESH_METERS } from '../../services/drivingMap'
+import { AlongRouteSearch } from './AlongRouteSearch'
 import { LaneGuidance } from './LaneGuidance'
+
+/** En navigation, la légende feux/STOP ne s'affiche qu'à moins de cette distance. */
+const CONTROLS_LEGEND_NEAR_METERS = 600
+/** Recentrage automatique sur la position après ce délai sans toucher la carte. */
+const AUTO_RECENTER_MS = 8_000
+/** Vibrations d'approche d'une manœuvre. */
+const MANEUVER_SOON_METERS = 250
+const MANEUVER_NOW_METERS = 40
+
+/** Constante de lissage de l'inclinaison et du décalage de la caméra. */
+const CAMERA_SMOOTHING_MS = 300
+/** Lissage plus lent du zoom : il suit la vitesse sans « respirer » à chaque variation. */
+const CAMERA_ZOOM_SMOOTHING_MS = 1_500
+/** Durée du raccord quand la caméra recommence à suivre la position. */
+const CAMERA_CATCH_UP_MS = 700
+/** Collé au tracé tant qu'on en est à moins de cette distance (ou de la précision GPS, plafonnée). */
+const ROUTE_SNAP_MAX_METERS = 30
+const ROUTE_SNAP_ACCURACY_CAP_METERS = 50
+
+type CameraCatchUp = 'pending' | { start: number; center: [number, number]; bearing: number }
+
+const lerp = (from: number, to: number, t: number) => from + (to - from) * t
 
 /** Tolérance avant l'alerte de survitesse : 5 km/h, ou 5 % au-delà de 100 km/h. */
 const getOverspeedTolerance = (limit: number) => Math.max(5, limit * 0.05)
@@ -70,6 +106,11 @@ export function MapCanvas() {
   const routeControlMarkerRefs = useRef<Map<string, MapLibreMarker>>(new Map())
   const currentPositionMarkerRef = useRef<MapLibreMarker | null>(null)
   const routeReportMarkerRefs = useRef(new Map<string, MapLibreMarker>())
+  const motionRef = useRef<MotionState | null>(null)
+  const cameraFollowRef = useRef<{ pitch: number; paddingTop: number } | null>(null)
+  /** Zoom visé, recalculé à chaque point GPS selon la vitesse et la prochaine manœuvre. */
+  const cameraZoomTargetRef = useRef(17)
+  const cameraCatchUpRef = useRef<CameraCatchUp | null>(null)
   const [status, setStatus] = useState<MapStatus>('loading')
   const [trafficEnabled, setTrafficEnabled] = useState(() => {
     try {
@@ -84,6 +125,9 @@ export function MapCanvas() {
   const [attempt, setAttempt] = useState(0)
   const [mapViewportMobile, setMapViewportMobile] = useState(false)
   const [followingPosition, setFollowingPosition] = useState(true)
+  /** Début du compte à rebours avant recentrage automatique (null : en pause ou inactif). */
+  const [recenterCountdownStart, setRecenterCountdownStart] = useState<number | null>(null)
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false)
   const [routeReports, setRouteReports] = useState<RouteReport[]>([])
   const [reportMode, setReportMode] = useState<RouteReportType | null>(null)
   const [reportMenuOpen, setReportMenuOpen] = useState(false)
@@ -103,12 +147,17 @@ export function MapCanvas() {
   const routeOptions = useInterfaceStore((state) => state.routeOptions)
   const selectedRouteIndex = useInterfaceStore((state) => state.selectedRouteIndex)
   const navigationActive = useInterfaceStore((state) => state.navigationActive)
+  const freeDriveActive = useInterfaceStore((state) => state.freeDriveActive)
+  /** Navigation guidée ou conduite libre : la carte suit la position. */
+  const drivingActive = navigationActive || freeDriveActive
   const navigationRerouting = useInterfaceStore((state) => state.navigationRerouting)
   // Lu par l'effet du tracé sans le relancer : pas de recadrage sur tout le trajet en pleine navigation.
   const navigationActiveRef = useRef(navigationActive)
   navigationActiveRef.current = navigationActive
   const currentPosition = useInterfaceStore((state) => state.currentPosition)
   const movementIcon = useInterfaceStore((state) => state.movementIcon)
+  const movementIconRef = useRef(movementIcon)
+  movementIconRef.current = movementIcon
   const resolvedTheme = useInterfaceStore((state) => state.resolvedTheme)
   const navigationStepIndex = useInterfaceStore((state) => state.navigationStepIndex)
   // Calculé une seule fois par position GPS (dans RoutePanel), pas à chaque rendu.
@@ -116,6 +165,11 @@ export function MapCanvas() {
   const navigationError = useInterfaceStore((state) => state.navigationError)
   const favorites = useInterfaceStore((state) => state.favorites)
   const stopNavigation = useInterfaceStore((state) => state.stopNavigation)
+  const startFreeDrive = useInterfaceStore((state) => state.startFreeDrive)
+  const stopFreeDrive = useInterfaceStore((state) => state.stopFreeDrive)
+  const offlineMapEnabled = useInterfaceStore((state) => state.offlineMapEnabled)
+  const [alongRouteOpen, setAlongRouteOpen] = useState(false)
+  const [shareFeedback, setShareFeedback] = useState('')
   const isDarkMapStyle = resolvedTheme === 'dark'
   const resolvedThemeRef = useRef(resolvedTheme)
   resolvedThemeRef.current = resolvedTheme
@@ -131,10 +185,14 @@ export function MapCanvas() {
   const previousProgress = routeProgressRef.current.route === route ? routeProgressRef.current.along : 0
   const routeProgress = guidance && guidance.distanceFromRoute <= 100 ? guidance.along : previousProgress
   routeProgressRef.current = { route, along: routeProgress }
-  const speedLimit =
+  const freeDrive = useFreeDrive(freeDriveActive)
+  const routeSpeedLimit =
     routeSpeedLimits && guidance && !offRoute ? getSpeedLimitAt(routeSpeedLimits, guidance.along) : null
-  const speedLimitStatus: SpeedLimitStatus =
-    speedLimitsStatus === 'available' && speedLimit === null ? 'unavailable' : speedLimitsStatus
+  // Sans itinéraire, la limitation vient du recalage des derniers points GPS.
+  const speedLimit = freeDriveActive ? freeDrive.speedLimit : routeSpeedLimit
+  const speedLimitStatus: SpeedLimitStatus = freeDriveActive
+    ? freeDrive.limitStatus
+    : speedLimitsStatus === 'available' && speedLimit === null ? 'unavailable' : speedLimitsStatus
   const currentSpeedKmh =
     currentPosition?.speed === null || currentPosition?.speed === undefined ? null : currentPosition.speed * 3.6
   const overspeed =
@@ -150,6 +208,10 @@ export function MapCanvas() {
   )
   const nextLight = upcomingControls.find((control) => control.type === 'traffic-light')
   const nextStop = upcomingControls.find((control) => control.type === 'stop')
+  // Écran épuré en navigation : la légende feux/STOP n'apparaît qu'à leur approche.
+  const controlsNearby = [nextLight, nextStop].some(
+    (control) => control && control.distanceAlongRoute - routeProgress <= CONTROLS_LEGEND_NEAR_METERS,
+  )
 
   useEffect(() => {
     if (!mapContainerRef.current) return
@@ -625,6 +687,110 @@ export function MapCanvas() {
     }
   }, [upcomingControls, status])
 
+  // Nouveau point GPS : nouvel état de mouvement (prédiction + collage au tracé),
+  // raccordé en douceur à ce qui est affiché. Le zoom visé suit la vitesse.
+  useEffect(() => {
+    if (!currentPosition) {
+      motionRef.current = null
+      return
+    }
+
+    const snapToRoute =
+      navigationActive &&
+      route !== null &&
+      guidance !== null &&
+      guidance.distanceFromRoute <=
+        Math.max(ROUTE_SNAP_MAX_METERS, Math.min(currentPosition.accuracy, ROUTE_SNAP_ACCURACY_CAP_METERS))
+    const routeBearing = navigationActive && route && guidance ? getRouteBearing(route, guidance.along) : null
+
+    motionRef.current = createMotionState(
+      {
+        coordinates: currentPosition.coordinates,
+        speed: currentPosition.speed,
+        heading: currentPosition.heading,
+        snap: snapToRoute && route && guidance ? { coordinates: route.coordinates, along: guidance.along } : null,
+        fallbackHeading: routeBearing,
+      },
+      performance.now(),
+      motionRef.current,
+    )
+    cameraZoomTargetRef.current = getDrivingZoom(
+      currentPosition.speed,
+      guidance && !isOffRoute(guidance, currentPosition.accuracy) ? guidance.distanceToStep : null,
+    )
+    // guidance et route sont mis à jour en même temps que la position (même mise à jour du store).
+  }, [currentPosition])
+
+  // Boucle d'animation : marqueur et caméra suivent la position prédite à chaque image.
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map) return
+
+    let frame = 0
+    let lastFrame = performance.now()
+    let settledMotion: MotionState | null = null
+
+    const tick = (now: number) => {
+      frame = requestAnimationFrame(tick)
+      const dt = Math.min(now - lastFrame, 100)
+      lastFrame = now
+
+      const motion = motionRef.current
+      if (!motion) return
+      const { coordinates, heading, settled } = getMotionFrame(motion, now)
+
+      const marker = currentPositionMarkerRef.current
+      if (marker && settledMotion !== motion) {
+        marker.setLngLat(coordinates)
+        marker.setRotation(movementIconRef.current === 'dot' ? 0 : heading)
+        if (settled) settledMotion = motion
+      }
+
+      const follow = cameraFollowRef.current
+      if (!follow) return
+
+      let center = coordinates
+      let bearing = heading
+      let catchUp = cameraCatchUpRef.current
+      if (catchUp === 'pending') {
+        const mapCenter = map.getCenter()
+        catchUp = { start: now, center: [mapCenter.lng, mapCenter.lat], bearing: map.getBearing() }
+        cameraCatchUpRef.current = catchUp
+      }
+      if (catchUp) {
+        const t = Math.min((now - catchUp.start) / CAMERA_CATCH_UP_MS, 1)
+        const eased = 1 - (1 - t) ** 3
+        center = [lerp(catchUp.center[0], coordinates[0], eased), lerp(catchUp.center[1], coordinates[1], eased)]
+        bearing = catchUp.bearing + getAngleDelta(catchUp.bearing, heading) * eased
+        if (t >= 1) cameraCatchUpRef.current = null
+      }
+
+      const zoom = map.getZoom()
+      const pitch = map.getPitch()
+      const paddingTop = map.getPadding().top ?? 0
+      const zoomTarget = cameraZoomTargetRef.current
+      const cameraSettled =
+        !catchUp &&
+        Math.abs(zoomTarget - zoom) < 0.002 &&
+        Math.abs(follow.pitch - pitch) < 0.01 &&
+        Math.abs(follow.paddingTop - paddingTop) < 0.5
+      if (cameraSettled && settledMotion === motion) return
+
+      const k = 1 - Math.exp(-dt / CAMERA_SMOOTHING_MS)
+      const zoomK = 1 - Math.exp(-dt / CAMERA_ZOOM_SMOOTHING_MS)
+      map.jumpTo({
+        center,
+        bearing,
+        zoom: lerp(zoom, zoomTarget, zoomK),
+        pitch: lerp(pitch, follow.pitch, k),
+        padding: { top: lerp(paddingTop, follow.paddingTop, k), bottom: 0, left: 0, right: 0 },
+      })
+    }
+
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [status])
+
   useEffect(() => {
     const map = mapRef.current
     if (status !== 'ready' || !map) return
@@ -686,10 +852,13 @@ export function MapCanvas() {
             ? 'Votre position actuelle, représentée par une flèche'
             : 'Votre position GPS actuelle',
       )
+      // Position et rotation sont ensuite animées image par image (voir la boucle d'animation).
+      const motion = motionRef.current
+      const displayed = motion ? getMotionFrame(motion, performance.now()) : null
       marker
-        .setLngLat(currentPosition.coordinates)
+        .setLngLat(displayed?.coordinates ?? currentPosition.coordinates)
         .setRotationAlignment('map')
-        .setRotation(movementIcon === 'dot' ? 0 : currentPosition.heading ?? 0)
+        .setRotation(movementIcon === 'dot' ? 0 : displayed?.heading ?? currentPosition.heading ?? 0)
       if (createMarker) marker.addTo(map)
     }).catch((error: unknown) => {
       if (!disposed) {
@@ -749,6 +918,7 @@ export function MapCanvas() {
     if (now - lastOverspeedBeepRef.current < OVERSPEED_BEEP_COOLDOWN_MS) return
     lastOverspeedBeepRef.current = now
     playAlertBeep()
+    haptic('warning')
   }, [overspeed])
 
   useEffect(() => {
@@ -756,6 +926,7 @@ export function MapCanvas() {
 
     setReportMode(null)
     setReportMenuOpen(false)
+    setStopConfirmOpen(false)
     setRouteReports([])
     setReportError('')
     routeReportMarkerRefs.current.forEach((marker) => marker.remove())
@@ -831,51 +1002,205 @@ export function MapCanvas() {
     }
   }, [navigationActive, routeReports, status])
 
+  // Carte allégée pendant la conduite : rendu moins coûteux, sans détails inutiles en roulant.
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map) return
+    applyDrivingMapLook(map, drivingActive)
+  }, [drivingActive, status])
+
+  // Carte hors ligne : tuiles préchargées devant soi au départ, puis tous les PREFETCH_REFRESH_METERS.
+  const prefetchStep = Math.floor(routeProgress / PREFETCH_REFRESH_METERS)
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map || !navigationActive || !route || !offlineMapEnabled) return
+    // On laisse d'abord la carte charger ce qui est à l'écran.
+    const timer = window.setTimeout(() => prefetchRouteTiles(map, route, routeProgressRef.current.along), 4_000)
+    return () => window.clearTimeout(timer)
+  }, [navigationActive, offlineMapEnabled, prefetchStep, route, status])
+
+  const shareArrival = async () => {
+    if (!remaining) return
+    haptic('tap')
+    const text = `J’arrive${destination ? ` à ${destination.name}` : ''} vers ${formatArrivalTime(remaining.duration)} (dans ${formatDuration(remaining.duration)}).`
+    try {
+      if (typeof navigator.share === 'function') {
+        await navigator.share({ text })
+        return
+      }
+      await navigator.clipboard.writeText(text)
+      setShareFeedback('Heure d’arrivée copiée')
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      setShareFeedback('Partage impossible sur cet appareil')
+    }
+  }
+
+  useEffect(() => {
+    if (!shareFeedback) return
+    const timer = window.setTimeout(() => setShareFeedback(''), 2_500)
+    return () => window.clearTimeout(timer)
+  }, [shareFeedback])
+
   const wasNavigationActiveRef = useRef(false)
 
   useEffect(() => {
     const map = mapRef.current
     if (status !== 'ready' || !map) return
 
-    if (!navigationActive) {
+    if (!drivingActive) {
       setFollowingPosition(true)
+      setRecenterCountdownStart(null)
       return
     }
 
-    const stopFollowing = () => setFollowingPosition(false)
+    let interacting = false
+    const stopFollowing = () => {
+      // Coupé tout de suite, sans attendre le rendu React, pour que la boucle ne lutte pas contre le geste.
+      cameraFollowRef.current = null
+      cameraCatchUpRef.current = null
+      setFollowingPosition(false)
+    }
+    const startInteraction = () => {
+      interacting = true
+      setRecenterCountdownStart(null)
+    }
+    const endInteraction = () => {
+      interacting = false
+      if (!cameraFollowRef.current) setRecenterCountdownStart(Date.now())
+    }
+    // Mouvement venant d'un geste (nos jumpTo de suivi n'ont pas d'originalEvent).
+    const handleUserCameraChange = (event: { originalEvent?: Event }) => {
+      if (event.originalEvent) stopFollowing()
+    }
+    const handleTouchStart = (event: MapTouchEvent) => {
+      startInteraction()
+      // Pincer ou tourner à deux doigts : on arrête de suivre dès le 2e doigt, avant que le geste ne démarre.
+      if (event.originalEvent.touches.length >= 2) stopFollowing()
+    }
+    const handleTouchEnd = (event: MapTouchEvent) => {
+      if (event.originalEvent.touches.length === 0) endInteraction()
+    }
+    // Molette : le compte à rebours repartira au moveend du zoom.
+    const handleWheel = () => {
+      stopFollowing()
+      setRecenterCountdownStart(null)
+    }
+    // Fin d'un déplacement (inertie comprise) : le compte à rebours du recentrage repart.
+    const handleMoveEnd = () => {
+      if (!interacting && !cameraFollowRef.current) setRecenterCountdownStart(Date.now())
+    }
+
     map.on('dragstart', stopFollowing)
+    map.on('zoomstart', handleUserCameraChange)
+    map.on('rotatestart', handleUserCameraChange)
+    map.on('pitchstart', handleUserCameraChange)
+    map.on('touchstart', handleTouchStart)
+    map.on('touchend', handleTouchEnd)
+    map.on('touchcancel', handleTouchEnd)
+    map.on('mousedown', startInteraction)
+    map.on('mouseup', endInteraction)
+    map.on('wheel', handleWheel)
+    map.on('moveend', handleMoveEnd)
     return () => {
       map.off('dragstart', stopFollowing)
+      map.off('zoomstart', handleUserCameraChange)
+      map.off('rotatestart', handleUserCameraChange)
+      map.off('pitchstart', handleUserCameraChange)
+      map.off('touchstart', handleTouchStart)
+      map.off('touchend', handleTouchEnd)
+      map.off('touchcancel', handleTouchEnd)
+      map.off('mousedown', startInteraction)
+      map.off('mouseup', endInteraction)
+      map.off('wheel', handleWheel)
+      map.off('moveend', handleMoveEnd)
     }
-  }, [navigationActive, status])
+  }, [drivingActive, status])
+
+  // Recentrage automatique après AUTO_RECENTER_MS sans toucher la carte
+  // (en pause pendant un signalement, le temps de choisir où le placer).
+  useEffect(() => {
+    if (reportMode || reportMenuOpen || alongRouteOpen) setRecenterCountdownStart(null)
+    else if (drivingActive && !cameraFollowRef.current) setRecenterCountdownStart(Date.now())
+  }, [alongRouteOpen, drivingActive, reportMenuOpen, reportMode])
+
+  useEffect(() => {
+    if (followingPosition) {
+      setRecenterCountdownStart(null)
+      return
+    }
+    if (recenterCountdownStart === null || !drivingActive || alongRouteOpen || reportMode || reportMenuOpen) return
+    const delay = Math.max(0, AUTO_RECENTER_MS - (Date.now() - recenterCountdownStart))
+    const timer = window.setTimeout(() => {
+      setRecenterCountdownStart(null)
+      setFollowingPosition(true)
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [alongRouteOpen, followingPosition, drivingActive, recenterCountdownStart, reportMenuOpen, reportMode])
+
+  // Vibrations à l'approche de la prochaine manœuvre (une fois à 250 m, une fois au moment de tourner).
+  const maneuverHapticRef = useRef({ stepIndex: -1, soon: false, now: false })
+  useEffect(() => {
+    if (!navigationActive || !guidance || !currentPosition || isOffRoute(guidance, currentPosition.accuracy)) return
+    const state = maneuverHapticRef.current
+    if (state.stepIndex !== guidance.stepIndex) {
+      // Nouvelle manœuvre : si on est déjà tout près (étapes rapprochées), pas d'alerte « bientôt ».
+      maneuverHapticRef.current = {
+        stepIndex: guidance.stepIndex,
+        soon: guidance.distanceToStep <= MANEUVER_NOW_METERS,
+        now: false,
+      }
+    }
+    const current = maneuverHapticRef.current
+    if (!current.soon && guidance.distanceToStep <= MANEUVER_SOON_METERS) {
+      current.soon = true
+      haptic('maneuver-soon')
+    } else if (!current.now && guidance.distanceToStep <= MANEUVER_NOW_METERS) {
+      current.now = true
+      current.soon = true
+      haptic('maneuver-now')
+    }
+  }, [currentPosition, guidance, navigationActive])
 
   useEffect(() => {
     const map = mapRef.current
     if (status !== 'ready' || !map) return
 
-    if (!navigationActive) {
+    if (!drivingActive) {
+      cameraFollowRef.current = null
+      cameraCatchUpRef.current = null
       if (wasNavigationActiveRef.current) {
-        map.easeTo({ pitch: 0, bearing: 0, offset: [0, 0], duration: 700, essential: true })
+        map.easeTo({
+          pitch: 0,
+          bearing: 0,
+          padding: { top: 0, bottom: 0, left: 0, right: 0 },
+          duration: 700,
+          essential: true,
+        })
       }
       wasNavigationActiveRef.current = false
       return
     }
 
     wasNavigationActiveRef.current = true
-    if (!currentPosition || !followingPosition) return
+    if (!followingPosition) {
+      cameraFollowRef.current = null
+      cameraCatchUpRef.current = null
+      return
+    }
 
-    const routeBearing = route && guidance ? getRouteBearing(route, guidance.along) : null
-    const bearing = currentPosition.heading ?? routeBearing ?? map.getBearing()
-    map.easeTo({
-      center: currentPosition.coordinates,
-      zoom: 17,
+    // La caméra elle-même est déplacée image par image par la boucle d'animation.
+    // Le décalage vers le bas de la position passe par un padding haut (= 2 × l'ancien offset).
+    const wasFollowing = cameraFollowRef.current !== null
+    cameraFollowRef.current = {
       pitch: mapViewportMobile ? 55 : 58,
-      bearing,
-      offset: [0, Math.round(map.getContainer().clientHeight * (mapViewportMobile ? 0.12 : 0.16))],
-      duration: 700,
-      essential: true,
-    })
-  }, [currentPosition, followingPosition, mapViewportMobile, navigationActive, route, status])
+      paddingTop: Math.round(map.getContainer().clientHeight * (mapViewportMobile ? 0.24 : 0.32)),
+    }
+    if (!wasFollowing) {
+      map.stop()
+      cameraCatchUpRef.current = 'pending'
+    }
+  }, [followingPosition, mapViewportMobile, drivingActive, status])
 
   useEffect(() => {
     const map = mapRef.current
@@ -981,8 +1306,8 @@ export function MapCanvas() {
 
   return (
     <section
-      className={`map-canvas ${navigationActive ? 'map-navigation-active' : ''} ${upcomingLanes ? 'has-lanes' : ''}`}
-      aria-label={navigationActive ? 'Carte de navigation en perspective' : 'Carte interactive'}
+      className={`map-canvas ${drivingActive ? 'map-navigation-active' : ''} ${upcomingLanes ? 'has-lanes' : ''}`}
+      aria-label={drivingActive ? 'Carte de navigation en perspective' : 'Carte interactive'}
     >
       <div className="map-host" ref={mapContainerRef} />
       {trafficEnabled && (trafficStatus === 'loading' || trafficStatus === 'zoom' || trafficStatus === 'error') && (
@@ -992,7 +1317,7 @@ export function MapCanvas() {
           {trafficStatus === 'error' && 'Trafic indisponible'}
         </div>
       )}
-      {route && routeControlsStatus !== 'idle' && (
+      {route && routeControlsStatus !== 'idle' && (!navigationActive || controlsNearby) && (
         <div className="route-controls-legend" role="status" aria-live="polite">
           {routeControlsStatus === 'loading' && upcomingControls.length === 0 ? (
             <><LoaderCircle size={14} className="route-button-spinner" /> Recherche des feux et STOP à proximité…</>
@@ -1078,6 +1403,131 @@ export function MapCanvas() {
             )}
           </section>
 
+          <div className="route-report-tools">
+            <button
+              type="button"
+              className={`route-report-toggle ${reportMenuOpen ? 'route-report-toggle-active' : ''}`}
+              aria-label={reportMenuOpen ? 'Fermer les signalements' : 'Ajouter un signalement sur la route'}
+              aria-expanded={reportMenuOpen}
+              title="Ajouter un signalement"
+              onClick={() => {
+                haptic('tap')
+                setReportMode(null)
+                setReportMenuOpen((isOpen) => !isOpen)
+              }}
+            >
+              {reportMenuOpen ? <X size={22} /> : <Plus size={24} />}
+            </button>
+            {reportMenuOpen && (
+              <div className="route-report-menu" aria-label="Type de signalement">
+                {([
+                  { type: 'traffic', label: 'Bouchon', Icon: Car },
+                  { type: 'police', label: 'Police', Icon: Shield },
+                  { type: 'obstacle', label: 'Objet sur la route', Icon: AlertTriangle },
+                  { type: 'danger', label: 'Danger', Icon: AlertTriangle },
+                ] as const).map(({ type, label, Icon }) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => {
+                      haptic('tap')
+                      setReportMode(type)
+                      setReportMenuOpen(false)
+                    }}
+                  >
+                    <Icon size={20} />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <AlongRouteSearch
+              map={mapRef.current}
+              mapReady={status === 'ready'}
+              along={routeProgress}
+              onOpenChange={(open) => {
+                setAlongRouteOpen(open)
+                if (open) setReportMenuOpen(false)
+              }}
+            />
+          </div>
+
+          {reportMode && (
+            <div className="route-report-prompt" role="status">
+              Touchez la carte pour placer : {getRouteReportLabel(reportMode).toLocaleLowerCase('fr-FR')}
+              <button type="button" onClick={() => setReportMode(null)} aria-label="Annuler le signalement">
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          {reportError && <p className="route-report-error" role="alert">{reportError}</p>}
+          {shareFeedback && <p className="map-share-feedback" role="status">{shareFeedback}</p>}
+
+          <section className="map-navigation-dashboard" aria-label="Résumé de navigation">
+            <button
+              type="button"
+              className="map-navigation-metric map-navigation-share"
+              onClick={() => void shareArrival()}
+              disabled={!remaining}
+              aria-label={`Arrivée estimée ${remaining ? formatArrivalTime(remaining.duration) : 'inconnue'}. Partager l’heure d’arrivée`}
+            >
+              <span>Arrivée estimée <Share2 size={11} aria-hidden="true" /></span>
+              <strong>{remaining ? formatArrivalTime(remaining.duration) : '—'}</strong>
+            </button>
+            <div className="map-navigation-metric">
+              <span><Clock3 size={11} />Durée · distance</span>
+              <strong>{remaining ? `${formatDuration(remaining.duration)} · ${formatDistance(remaining.distance)}` : '—'}</strong>
+            </div>
+            <div className="map-navigation-direction" aria-label={`Direction : ${getDirectionLabel(direction)}`}>
+              <DirectionIcon size={25} strokeWidth={2.6} />
+            </div>
+            <button
+              type="button"
+              className="map-navigation-stop"
+              onClick={() => {
+                haptic('tap')
+                setStopConfirmOpen(true)
+              }}
+              aria-label="Arrêter la navigation"
+              aria-haspopup="dialog"
+              title="Arrêter"
+            >
+              <StopCircle size={22} />
+            </button>
+          </section>
+          {stopConfirmOpen && (
+            <div className="map-stop-confirm-backdrop" onClick={() => setStopConfirmOpen(false)}>
+              <div
+                className="map-stop-confirm"
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="map-stop-confirm-title"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <p id="map-stop-confirm-title">Arrêter la navigation ?</p>
+                <div className="map-stop-confirm-actions">
+                  <button type="button" autoFocus onClick={() => setStopConfirmOpen(false)}>
+                    Continuer
+                  </button>
+                  <button
+                    type="button"
+                    className="is-danger"
+                    onClick={() => {
+                      haptic('confirm')
+                      setStopConfirmOpen(false)
+                      stopNavigation()
+                    }}
+                  >
+                    Arrêter
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      {drivingActive && (
+        <>
           <section className="map-live-speeds" aria-label="Vitesses">
             {overspeed && (
               <span className="map-overspeed-label" role="alert">Ralentissez</span>
@@ -1108,84 +1558,78 @@ export function MapCanvas() {
               <span>km/h</span>
             </div>
           </section>
-
-          <div className="route-report-tools">
-            <button
-              type="button"
-              className={`route-report-toggle ${reportMenuOpen ? 'route-report-toggle-active' : ''}`}
-              aria-label={reportMenuOpen ? 'Fermer les signalements' : 'Ajouter un signalement sur la route'}
-              aria-expanded={reportMenuOpen}
-              title="Ajouter un signalement"
-              onClick={() => {
-                setReportMode(null)
-                setReportMenuOpen((isOpen) => !isOpen)
-              }}
-            >
-              {reportMenuOpen ? <X size={22} /> : <Plus size={24} />}
-            </button>
-            {reportMenuOpen && (
-              <div className="route-report-menu" aria-label="Type de signalement">
-                {([
-                  { type: 'traffic', label: 'Bouchon', Icon: Car },
-                  { type: 'police', label: 'Police', Icon: Shield },
-                  { type: 'obstacle', label: 'Objet sur la route', Icon: AlertTriangle },
-                  { type: 'danger', label: 'Danger', Icon: AlertTriangle },
-                ] as const).map(({ type, label, Icon }) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => {
-                      setReportMode(type)
-                      setReportMenuOpen(false)
-                    }}
-                  >
-                    <Icon size={17} />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {reportMode && (
-            <div className="route-report-prompt" role="status">
-              Touchez la carte pour placer : {getRouteReportLabel(reportMode).toLocaleLowerCase('fr-FR')}
-              <button type="button" onClick={() => setReportMode(null)} aria-label="Annuler le signalement">
-                <X size={16} />
-              </button>
-            </div>
-          )}
-          {reportError && <p className="route-report-error" role="alert">{reportError}</p>}
-
-          <section className="map-navigation-dashboard" aria-label="Résumé de navigation">
-            <div className="map-navigation-metric">
-              <span>Arrivée estimée</span>
-              <strong>{remaining ? formatArrivalTime(remaining.duration) : '—'}</strong>
-            </div>
-            <div className="map-navigation-metric">
-              <span><Clock3 size={11} />Durée · distance</span>
-              <strong>{remaining ? `${formatDuration(remaining.duration)} · ${formatDistance(remaining.distance)}` : '—'}</strong>
-            </div>
-            <div className="map-navigation-direction" aria-label={`Direction : ${getDirectionLabel(direction)}`}>
-              <DirectionIcon size={25} strokeWidth={2.6} />
-            </div>
-            <button type="button" onClick={stopNavigation} aria-label="Arrêter la navigation" title="Arrêter">
-              <StopCircle size={18} />
-            </button>
-          </section>
           {currentPosition && !followingPosition && (
             <button
               type="button"
               className="map-recenter-button"
-              onClick={() => setFollowingPosition(true)}
+              onClick={() => {
+                haptic('tap')
+                setRecenterCountdownStart(null)
+                setFollowingPosition(true)
+              }}
               aria-label="Recentrer la carte sur ma position"
               title="Recentrer sur ma position"
             >
-              <LocateFixed size={21} />
+              <LocateFixed size={22} />
               <span>Recentrer</span>
+              {recenterCountdownStart !== null && (
+                <span
+                  key={recenterCountdownStart}
+                  className="map-recenter-progress"
+                  style={{ animationDuration: `${AUTO_RECENTER_MS}ms` }}
+                  aria-hidden="true"
+                />
+              )}
             </button>
           )}
         </>
+      )}
+      {freeDriveActive && (
+        <section className="map-free-drive-bar" aria-label="Conduite libre">
+          <span className="map-free-drive-icon" aria-hidden="true"><Gauge size={22} /></span>
+          <span className="map-free-drive-copy">
+            <strong>Conduite libre</strong>
+            <span>
+              {navigationError
+                ? navigationError
+                : !currentPosition
+                  ? 'Recherche de votre position GPS…'
+                  : speedLimitStatus === 'loading'
+                    ? 'Recherche de la limitation…'
+                    : speedLimitStatus === 'unavailable'
+                      ? 'Limitation inconnue sur cette route'
+                      : 'Vitesse et limitation en direct'}
+            </span>
+          </span>
+          <button
+            type="button"
+            className="map-free-drive-stop"
+            onClick={() => {
+              haptic('confirm')
+              stopFreeDrive()
+            }}
+            aria-label="Arrêter la conduite libre"
+          >
+            <StopCircle size={22} />
+            <span>Arrêter</span>
+          </button>
+        </section>
+      )}
+      {!drivingActive && status === 'ready' && (
+        <button
+          type="button"
+          className="map-free-drive-start"
+          onClick={() => {
+            // Débloque le son de survitesse (autorisé seulement après un geste).
+            unlockAlertSound()
+            haptic('confirm')
+            startFreeDrive()
+          }}
+          title="Conduire sans itinéraire : vitesse et limitation en direct"
+        >
+          <Gauge size={18} />
+          <span>Conduire</span>
+        </button>
       )}
       <div className="map-provider-badge">
         <span className="preview-dot" />

@@ -37,11 +37,12 @@ export function watchCurrentLocation(
       })
     },
     onError,
-    { enableHighAccuracy: true, timeout: 20000, maximumAge: 1500 },
+    // maximumAge 0 : pas de position en cache, qui ferait reculer le marqueur entre deux vrais points GPS.
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
   )
 }
 
-function getDistanceMeters(
+export function getDistanceMeters(
   first: [number, number],
   second: [number, number],
 ): number {

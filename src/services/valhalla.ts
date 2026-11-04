@@ -7,6 +7,9 @@ const VALHALLA_TRACE_ROUTE_URL = 'https://valhalla1.openstreetmap.de/trace_route
 export const VALHALLA_MAX_POINTS = 2_500
 const REQUEST_TIMEOUT_MS = 15_000
 
+type ShapeMatch = 'edge_walk' | 'map_snap'
+const DEFAULT_SHAPE_MATCHES: readonly ShapeMatch[] = ['edge_walk', 'map_snap']
+
 export interface ValhallaTraceEdge {
   begin_shape_index?: number
   end_shape_index?: number
@@ -40,8 +43,10 @@ export function fetchTraceAttributes(
   line: Point[],
   attributes: string[],
   signal: AbortSignal,
+  /** Points GPS bruts : map_snap directement (edge_walk n'accepte qu'un tracé exact). */
+  shapeMatches: readonly ShapeMatch[] = DEFAULT_SHAPE_MATCHES,
 ): Promise<ValhallaTraceResponse> {
-  return postTrace<ValhallaTraceResponse>(VALHALLA_TRACE_URL, line, { filters: { attributes, action: 'include' } }, signal)
+  return postTrace<ValhallaTraceResponse>(VALHALLA_TRACE_URL, line, { filters: { attributes, action: 'include' } }, signal, shapeMatches)
 }
 
 /**
@@ -61,9 +66,10 @@ async function postTrace<T>(
   line: Point[],
   options: Record<string, unknown>,
   signal: AbortSignal,
+  shapeMatches: readonly ShapeMatch[] = DEFAULT_SHAPE_MATCHES,
 ): Promise<T> {
   let lastError: Error = new Error(`Valhalla ${url} failed.`)
-  for (const shapeMatch of ['edge_walk', 'map_snap'] as const) {
+  for (const shapeMatch of shapeMatches) {
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
     const controller = new AbortController()
     const abort = () => controller.abort()

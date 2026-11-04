@@ -38,7 +38,31 @@ import {
 import { getCurrentLocation, getLocationErrorMessage, watchCurrentLocation } from '../../services/location'
 import { getNavigationGuidance, isOffRoute } from '../../services/navigation'
 import { unlockAlertSound } from '../../services/alertSound'
+import { haptic, hapticsSupported } from '../../services/haptics'
 import { getRouteProgress, getPointDistanceMeters, type Point } from '../../services/routeGeometry'
+
+type SheetSnap = 'collapsed' | 'half' | 'full'
+
+interface SheetDrag {
+  startY: number
+  lastY: number
+  lastTime: number
+  /** px/ms, positive vers le bas. */
+  velocity: number
+  height: number
+  maxHeight: number
+  /** Décalage de départ (panneau réduit : presque entièrement sous l'écran). */
+  baseOffset: number
+  moved: boolean
+}
+
+/** Partie visible du panneau réduit (la poignée). */
+const SHEET_COLLAPSED_VISIBLE_PX = 44
+/** Espace laissé au-dessus du panneau en plein écran. */
+const SHEET_TOP_GAP_PX = 12
+const SHEET_DRAG_THRESHOLD_PX = 36
+/** Geste rapide : change de position même sur une courte distance. */
+const SHEET_FLING_PX_PER_MS = 0.5
 
 /** Temps passé hors itinéraire avant de recalculer (évite de réagir à un écart GPS ponctuel). */
 const REROUTE_DELAY_MS = 8_000
@@ -70,8 +94,11 @@ const recentSectionContent = {
 }
 
 export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
-  const [mobilePanelCollapsed, setMobilePanelCollapsed] = useState(false)
-  const handlePointerStart = useRef<number | null>(null)
+  /** Panneau mobile : réduit, à mi-hauteur ou plein écran. */
+  const [sheetSnap, setSheetSnap] = useState<SheetSnap>('half')
+  const mobilePanelCollapsed = sheetSnap === 'collapsed'
+  const sheetRef = useRef<HTMLElement | null>(null)
+  const sheetDrag = useRef<SheetDrag | null>(null)
   const ignoreHandleClick = useRef(false)
   const [locating, setLocating] = useState(false)
   const [locationError, setLocationError] = useState('')
@@ -89,6 +116,10 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const tollPreference = useInterfaceStore((state) => state.tollPreference)
   const movementIcon = useInterfaceStore((state) => state.movementIcon)
   const setMovementIcon = useInterfaceStore((state) => state.setMovementIcon)
+  const hapticsEnabled = useInterfaceStore((state) => state.hapticsEnabled)
+  const setHapticsEnabled = useInterfaceStore((state) => state.setHapticsEnabled)
+  const offlineMapEnabled = useInterfaceStore((state) => state.offlineMapEnabled)
+  const setOfflineMapEnabled = useInterfaceStore((state) => state.setOfflineMapEnabled)
   const themeMode = useInterfaceStore((state) => state.themeMode)
   const setThemeMode = useInterfaceStore((state) => state.setThemeMode)
   const route = useInterfaceStore((state) => state.route)
@@ -105,6 +136,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const removeWaypoint = useInterfaceStore((state) => state.removeWaypoint)
   const setDestination = useInterfaceStore((state) => state.setDestination)
   const startNavigation = useInterfaceStore((state) => state.startNavigation)
+  const freeDriveActive = useInterfaceStore((state) => state.freeDriveActive)
   const stopNavigation = useInterfaceStore((state) => state.stopNavigation)
   const updateNavigationPosition = useInterfaceStore((state) => state.updateNavigationPosition)
   const setNavigationError = useInterfaceStore((state) => state.setNavigationError)
@@ -129,28 +161,90 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
 
   useEffect(() => {
     if (section !== 'route' || settingsOpen || navigationActive) {
-      setMobilePanelCollapsed(false)
+      setSheetSnap('half')
     }
   }, [navigationActive, section, settingsOpen])
 
+  // Le panneau suit le doigt pendant le glisser, puis se cale sur la position la plus proche
+  // (en tenant compte de l'élan : un petit geste rapide suffit).
+  const applySheetDragStyle = (offset: number | null) => {
+    const sheet = sheetRef.current
+    const drag = sheetDrag.current
+    if (!sheet) return
+    if (offset === null || !drag) {
+      sheet.style.removeProperty('transition')
+      sheet.style.removeProperty('transform')
+      sheet.style.removeProperty('max-height')
+      return
+    }
+    sheet.style.transition = 'none'
+    if (offset >= 0) {
+      sheet.style.transform = `translateY(${offset}px)`
+      sheet.style.removeProperty('max-height')
+    } else {
+      // Vers le haut au-delà de la position actuelle : le panneau grandit.
+      sheet.style.transform = 'none'
+      sheet.style.maxHeight = `${Math.min(drag.height - offset, drag.maxHeight)}px`
+    }
+  }
+
   const handleSheetPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    handlePointerStart.current = event.clientY
+    const sheet = sheetRef.current
+    if (!sheet) return
+    const height = sheet.getBoundingClientRect().height
+    const parentHeight = sheet.parentElement?.getBoundingClientRect().height ?? window.innerHeight
+    sheetDrag.current = {
+      startY: event.clientY,
+      lastY: event.clientY,
+      lastTime: performance.now(),
+      velocity: 0,
+      height,
+      maxHeight: parentHeight - SHEET_TOP_GAP_PX,
+      baseOffset: sheetSnap === 'collapsed' ? height - SHEET_COLLAPSED_VISIBLE_PX : 0,
+      moved: false,
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
-  const handleSheetPointerUp = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    const startY = handlePointerStart.current
-    handlePointerStart.current = null
-    if (startY === null) return
+  const handleSheetPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = sheetDrag.current
+    if (!drag) return
+    const now = performance.now()
+    const elapsed = Math.max(1, now - drag.lastTime)
+    // Vitesse lissée en px/ms (positive vers le bas).
+    drag.velocity = drag.velocity * 0.6 + ((event.clientY - drag.lastY) / elapsed) * 0.4
+    drag.lastY = event.clientY
+    drag.lastTime = now
+    const delta = event.clientY - drag.startY
+    if (Math.abs(delta) > 4) drag.moved = true
+    if (drag.moved) applySheetDragStyle(Math.max(drag.baseOffset + delta, -(drag.maxHeight - drag.height)))
+  }
 
-    const distance = event.clientY - startY
-    if (Math.abs(distance) < 36) return
+  const handleSheetPointerUp = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = sheetDrag.current
+    sheetDrag.current = null
+    applySheetDragStyle(null)
+    if (!drag || !drag.moved) return
+
+    const delta = event.clientY - drag.startY
+    const fling = Math.abs(drag.velocity) > SHEET_FLING_PX_PER_MS
+    if (!fling && Math.abs(delta) < SHEET_DRAG_THRESHOLD_PX) return
 
     ignoreHandleClick.current = true
     window.setTimeout(() => {
       ignoreHandleClick.current = false
     }, 0)
-    setMobilePanelCollapsed(distance > 0)
+    haptic('tap')
+    const down = fling ? drag.velocity > 0 : delta > 0
+    setSheetSnap((snap) => {
+      if (down) {
+        // Depuis le plein écran, un long glisser (ou un geste rapide et ample) réduit directement.
+        if (snap === 'full') return delta > drag.height * 0.55 ? 'collapsed' : 'half'
+        return 'collapsed'
+      }
+      if (snap === 'collapsed') return -delta > drag.maxHeight * 0.6 ? 'full' : 'half'
+      return 'full'
+    })
   }
 
   const handleSheetClick = () => {
@@ -158,7 +252,8 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       ignoreHandleClick.current = false
       return
     }
-    setMobilePanelCollapsed((collapsed) => !collapsed)
+    haptic('tap')
+    setSheetSnap((snap) => (snap === 'collapsed' ? 'half' : 'collapsed'))
   }
 
   const isDestinationFavorite = destination
@@ -268,7 +363,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
 
   // Garde l'écran allumé pendant la navigation (sinon le téléphone se met en veille en plein trajet).
   useEffect(() => {
-    if (!navigationActive || !('wakeLock' in navigator)) return
+    if (!(navigationActive || freeDriveActive) || !('wakeLock' in navigator)) return
 
     let wakeLock: WakeLockSentinel | null = null
     let released = false
@@ -296,7 +391,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       void wakeLock?.release()
     }
-  }, [navigationActive])
+  }, [navigationActive, freeDriveActive])
 
   const handleUseCurrentLocation = async () => {
     setLocationDialogClosing(true)
@@ -347,7 +442,9 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
         <div className="settings-card">
           <div>
             <p className="settings-title">Apparence</p>
-            <p className="settings-description">Le mode Auto suit le thème de votre appareil.</p>
+            <p className="settings-description">
+              Le mode Auto suit le thème de votre appareil et, en conduite, passe en sombre au coucher du soleil.
+            </p>
           </div>
           <div className="theme-mode-options" role="group" aria-label="Thème de l’application">
             {([
@@ -396,6 +493,61 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
                   {value === 'car' ? <CarFront size={25} fill="currentColor" /> : null}
                 </span>
                 <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="settings-card">
+          <div>
+            <p className="settings-title">Vibrations</p>
+            <p className="settings-description">
+              {hapticsSupported()
+                ? 'Petite vibration aux boutons et à l’approche d’un virage.'
+                : 'Non prises en charge par ce navigateur (c’est le cas sur iPhone).'}
+            </p>
+          </div>
+          <div className="theme-mode-options settings-toggle-options" role="group" aria-label="Vibrations">
+            {([
+              { value: true, label: 'Activées' },
+              { value: false, label: 'Désactivées' },
+            ] as const).map(({ value, label }) => (
+              <button
+                key={label}
+                type="button"
+                className={`theme-mode-option ${hapticsEnabled === value ? 'theme-mode-option-selected' : ''}`}
+                aria-pressed={hapticsEnabled === value}
+                disabled={!hapticsSupported()}
+                onClick={() => {
+                  setHapticsEnabled(value)
+                  if (value) haptic('confirm')
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="settings-card">
+          <div>
+            <p className="settings-title">Carte hors ligne du trajet</p>
+            <p className="settings-description">
+              Au départ, la carte des 120 prochains km est téléchargée pour rester affichée dans les tunnels et
+              sans réseau (quelques Mo, ignoré en mode économie de données).
+            </p>
+          </div>
+          <div className="theme-mode-options settings-toggle-options" role="group" aria-label="Carte hors ligne du trajet">
+            {([
+              { value: true, label: 'Activée' },
+              { value: false, label: 'Désactivée' },
+            ] as const).map(({ value, label }) => (
+              <button
+                key={label}
+                type="button"
+                className={`theme-mode-option ${offlineMapEnabled === value ? 'theme-mode-option-selected' : ''}`}
+                aria-pressed={offlineMapEnabled === value}
+                onClick={() => setOfflineMapEnabled(value)}
+              >
+                {label}
               </button>
             ))}
           </div>
@@ -541,7 +693,8 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
 
   return (
     <section
-      className={`side-panel route-panel ${navigationActive ? 'route-panel-navigation' : ''} ${mobilePanelCollapsed ? 'side-panel-mobile-collapsed' : ''}`}
+      ref={sheetRef}
+      className={`side-panel route-panel ${navigationActive || freeDriveActive ? 'route-panel-navigation' : ''} ${mobilePanelCollapsed ? 'side-panel-mobile-collapsed' : ''} ${sheetSnap === 'full' ? 'side-panel-mobile-full' : ''}`}
       aria-labelledby="panel-title"
     >
       <button
@@ -550,9 +703,11 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
         aria-label={mobilePanelCollapsed ? 'Afficher le panneau du trajet' : 'Réduire le panneau du trajet'}
         aria-expanded={!mobilePanelCollapsed}
         onPointerDown={handleSheetPointerDown}
+        onPointerMove={handleSheetPointerMove}
         onPointerUp={handleSheetPointerUp}
         onPointerCancel={() => {
-          handlePointerStart.current = null
+          sheetDrag.current = null
+          applySheetDragStyle(null)
         }}
         onClick={handleSheetClick}
       >
@@ -911,6 +1066,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
             setNavigationError(null)
             // Le son n'est autorisé qu'après un clic : on le débloque maintenant pour l'alerte de survitesse.
             unlockAlertSound()
+            haptic('confirm')
             startNavigation()
           }}
         >

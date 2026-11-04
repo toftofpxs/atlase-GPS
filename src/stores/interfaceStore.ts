@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import type { Destination, RouteMode, RouteSummary, TollPreference } from '../types/geocoding'
 import type { CurrentPosition, SidebarSection } from '../types/navigation'
 import type { NavigationGuidance } from '../services/navigation'
+import { clearActiveTrip, saveActiveTrip, type ActiveTrip } from '../services/activeTrip'
 
 export type MovementIcon = 'dot' | 'arrow' | 'car'
 export type ThemeMode = 'auto' | 'light' | 'dark'
@@ -27,6 +28,10 @@ interface InterfaceState {
   routeMode: RouteMode
   tollPreference: TollPreference
   movementIcon: MovementIcon
+  /** Vibrations (boutons, approche d'une manœuvre). Ignoré par les iPhone. */
+  hapticsEnabled: boolean
+  /** Préchargement de la carte le long du trajet (tunnels, zones sans réseau). */
+  offlineMapEnabled: boolean
   route: RouteSummary | null
   routeOptions: RouteSummary[]
   selectedRouteIndex: number
@@ -34,6 +39,8 @@ interface InterfaceState {
   routeError: string | null
   routeRequestId: number
   navigationActive: boolean
+  /** Conduite sans itinéraire : vitesse et limitation affichées, carte qui suit. */
+  freeDriveActive: boolean
   currentPosition: CurrentPosition | null
   /** Position sur le trajet, calculée une seule fois par position GPS. */
   navigationGuidance: NavigationGuidance | null
@@ -58,12 +65,20 @@ interface InterfaceState {
   setRouteMode: (mode: RouteMode) => void
   setTollPreference: (preference: TollPreference) => void
   setMovementIcon: (icon: MovementIcon) => void
+  setHapticsEnabled: (enabled: boolean) => void
+  setOfflineMapEnabled: (enabled: boolean) => void
   selectRouteOption: (index: number) => void
   beginRouteCalculation: () => number
   completeRouteCalculation: (requestId: number, routes: RouteSummary[]) => void
   failRouteCalculation: (requestId: number, error: string) => void
   startNavigation: () => void
   stopNavigation: () => void
+  /** Reprend un trajet sauvegardé (appli fermée ou rechargée en pleine navigation). */
+  resumeTrip: (trip: ActiveTrip) => void
+  /** Ajoute un arrêt en cours de navigation : nouvelles étapes et nouveau trajet. */
+  applyDetour: (waypoints: Destination[], route: RouteSummary) => void
+  startFreeDrive: () => void
+  stopFreeDrive: () => void
   setCurrentPosition: (position: CurrentPosition | null) => void
   updateNavigationPosition: (position: CurrentPosition, guidance: NavigationGuidance) => void
   setNavigationRerouting: (rerouting: boolean) => void
@@ -73,7 +88,20 @@ interface InterfaceState {
   setNavigationError: (error: string | null) => void
 }
 
-export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
+/** Sauvegarde du trajet en cours (pour la reprise), à partir de l'état du store. */
+function persistTrip(state: InterfaceState): void {
+  if (!state.navigationActive || !state.route || !state.destination) return
+  saveActiveTrip({
+    origin: state.origin,
+    destination: state.destination,
+    waypoints: state.waypoints,
+    routeMode: state.routeMode,
+    tollPreference: state.tollPreference,
+    route: state.route,
+  })
+}
+
+export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => ({
   activeSection: 'route',
   settingsOpen: false,
   mobileNavOpen: false,
@@ -93,6 +121,8 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   routeMode: 'driving',
   tollPreference: 'with-tolls',
   movementIcon: 'arrow',
+  hapticsEnabled: true,
+  offlineMapEnabled: true,
   route: null,
   routeOptions: [],
   selectedRouteIndex: 0,
@@ -100,6 +130,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   routeError: null,
   routeRequestId: 0,
   navigationActive: false,
+  freeDriveActive: false,
   currentPosition: null, navigationGuidance: null,
   navigationStepIndex: 0, navigationRerouting: false,
   navigationError: null,
@@ -217,6 +248,8 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
     ),
   setTollPreference: (tollPreference) => set({ tollPreference }),
   setMovementIcon: (movementIcon) => set({ movementIcon }),
+  setHapticsEnabled: (hapticsEnabled) => set({ hapticsEnabled }),
+  setOfflineMapEnabled: (offlineMapEnabled) => set({ offlineMapEnabled }),
   beginRouteCalculation: () => {
     let requestId = 0
     set((state) => {
@@ -254,13 +287,56 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
         ? { route: null, routeLoading: false, routeError }
         : state,
     ),
-  startNavigation: () =>
-    set({ navigationActive: true, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null }),
-  stopNavigation: () =>
-    set({ navigationActive: false, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null }),
+  startNavigation: () => {
+    set({ navigationActive: true, freeDriveActive: false, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null })
+    persistTrip(get())
+  },
+  stopNavigation: () => {
+    clearActiveTrip()
+    set({ navigationActive: false, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null })
+  },
+  resumeTrip: (trip) => {
+    set((state) => ({
+      origin: trip.origin,
+      destination: trip.destination,
+      waypoints: trip.waypoints,
+      routeMode: trip.routeMode,
+      tollPreference: trip.tollPreference,
+      route: trip.route,
+      routeOptions: [trip.route],
+      selectedRouteIndex: 0,
+      routeLoading: false,
+      routeError: null,
+      routeRequestId: state.routeRequestId + 1,
+      activeSection: 'route',
+      settingsOpen: false,
+      navigationActive: true,
+      freeDriveActive: false,
+      currentPosition: null, navigationGuidance: null,
+      navigationStepIndex: 0, navigationRerouting: false,
+      navigationError: null,
+    }))
+    persistTrip(get())
+  },
+  applyDetour: (waypoints, route) => {
+    set({
+      waypoints,
+      route,
+      routeOptions: [route],
+      selectedRouteIndex: 0,
+      navigationGuidance: null,
+      navigationStepIndex: 0,
+      navigationRerouting: false,
+      navigationError: null,
+    })
+    persistTrip(get())
+  },
+  startFreeDrive: () =>
+    set({ freeDriveActive: true, navigationActive: false, currentPosition: null, navigationGuidance: null, navigationError: null }),
+  stopFreeDrive: () => set({ freeDriveActive: false, currentPosition: null }),
   setCurrentPosition: (currentPosition) => set({ currentPosition }),
   setNavigationRerouting: (navigationRerouting) => set({ navigationRerouting }),
-  applyReroute: (route) =>
+  applyReroute: (route) => {
     set({
       route,
       routeOptions: [route],
@@ -269,7 +345,9 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
       navigationStepIndex: 0,
       navigationRerouting: false,
       navigationError: null,
-    }),
+    })
+    persistTrip(get())
+  },
   updateNavigationPosition: (currentPosition, navigationGuidance) =>
     set({
       currentPosition,
@@ -299,6 +377,8 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set) => ({
   partialize: (state) => ({
     favorites: state.favorites,
     movementIcon: state.movementIcon,
+    hapticsEnabled: state.hapticsEnabled,
+    offlineMapEnabled: state.offlineMapEnabled,
     themeMode: state.themeMode,
   }),
 }))

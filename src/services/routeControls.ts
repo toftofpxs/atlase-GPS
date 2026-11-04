@@ -20,14 +20,17 @@ export interface RouteControlsResult {
   stopsAvailable: boolean
 }
 
-interface OverpassElement {
+export interface OverpassElement {
   id: number
+  type?: 'node' | 'way' | 'relation'
   lat: number
   lon: number
+  /** Centre des chemins et relations (requêtes « out center »). */
+  center?: { lat: number; lon: number }
   tags?: Record<string, string>
 }
 
-interface OverpassResponse {
+export interface OverpassResponse {
   elements?: OverpassElement[]
   remark?: string
 }
@@ -200,7 +203,7 @@ function isStopSign(tags: Record<string, string> | undefined): boolean {
  * un serveur de secours toutes les HEDGE_DELAY_MS (ou dès qu'un serveur
  * échoue). La première réponse valide gagne, les autres sont annulées.
  */
-function fetchOverpass(query: string, signal: AbortSignal): Promise<OverpassResponse> {
+export function fetchOverpass(query: string, signal: AbortSignal): Promise<OverpassResponse> {
   return new Promise((resolve, reject) => {
     const controllers: AbortController[] = []
     const timers: number[] = []
@@ -290,7 +293,7 @@ function clusterControls(controls: RouteControl[]): RouteControl[] {
   return clusters.map((cluster) => cluster.control)
 }
 
-function simplifyLine(points: Point[], toleranceMeters: number): Point[] {
+export function simplifyLine(points: Point[], toleranceMeters: number): Point[] {
   if (points.length <= 2) return points
   const keep = new Uint8Array(points.length)
   keep[0] = 1

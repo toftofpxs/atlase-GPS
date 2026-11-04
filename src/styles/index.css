@@ -545,3 +545,124 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .map-overspeed-label { padding: 3px 8px; color: #fff; background: #d32f2f; border-radius: var(--radius-pill); box-shadow: var(--shadow-control); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
 @keyframes overspeed-pulse { 50% { transform: scale(1.08); box-shadow: 0 0 0 8px rgb(211 47 47 / 25%); } }
 @media (prefers-reduced-motion: reduce) { .map-speed-limit.is-over { animation: none; } }
+
+/* --- Étape 2 : gestes et grands boutons --- */
+.settings-toggle-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.theme-mode-option:disabled { cursor: not-allowed; opacity: .5; }
+
+/* Arrêt de la navigation : bouton rouge + confirmation (évite un arrêt accidentel en roulant). */
+.map-navigation-dashboard > button.map-navigation-stop { color: var(--color-danger); }
+.map-stop-confirm-backdrop { position: absolute; inset: 0; z-index: 8; display: grid; place-items: end center; padding: 16px 12px calc(24px + env(safe-area-inset-bottom)); background: rgb(20 24 31 / 32%); animation: stop-confirm-fade 140ms ease-out; }
+.map-stop-confirm { width: min(100%, 420px); padding: 18px 16px 16px; color: var(--color-text); background: var(--color-surface-raised); border-radius: 16px; box-shadow: var(--shadow-sheet); animation: sheet-open 180ms ease-out; }
+.map-stop-confirm p { margin: 0 0 14px; font-size: 18px; font-weight: 600; text-align: center; }
+.map-stop-confirm-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.map-stop-confirm-actions button { min-height: 56px; color: var(--color-text); background: var(--color-canvas); border: 0; border-radius: 12px; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }
+.map-stop-confirm-actions button.is-danger { color: #fff; background: #d32f2f; }
+@keyframes stop-confirm-fade { from { opacity: 0; } }
+
+/* Recentrer : barre qui se vide avant le recentrage automatique. */
+.map-recenter-button { overflow: hidden; }
+.map-recenter-progress { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; background: var(--color-accent); transform-origin: left; animation: recenter-countdown linear forwards; }
+@keyframes recenter-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+@media (max-width: 760px) {
+  /* Panneau du trajet : suit le doigt, trois positions. */
+  .side-panel { transition: transform 260ms cubic-bezier(.2, .8, .2, 1), max-height 260ms cubic-bezier(.2, .8, .2, 1); }
+  .side-panel-mobile-full { max-height: calc(100% - 52px - env(safe-area-inset-bottom)); }
+  .sheet-handle { width: min(100%, 200px); }
+
+  /* Cibles tactiles plus grandes pendant la conduite. */
+  .route-report-toggle { width: 56px; height: 56px; }
+  .route-report-menu { width: 210px; }
+  .route-report-menu button { min-height: 52px; gap: 12px; font-size: 15px; }
+  .map-navigation-dashboard { grid-template-columns: minmax(0, .9fr) minmax(0, 1.3fr) 52px; }
+  .map-navigation-dashboard > button { width: 52px; height: 52px; }
+  .map-recenter-button { min-height: 52px; padding: 0 18px; font-size: 15px; }
+}
+@media (max-width: 360px) {
+  .map-navigation-dashboard { grid-template-columns: minmax(0, .8fr) minmax(0, 1.3fr) 48px; }
+  .map-navigation-dashboard > button { width: 48px; height: 48px; }
+}
+@media (prefers-reduced-motion: reduce) { .map-recenter-progress { animation: none; display: none; } }
+/* --- Étape 3 : lisibilité en conduite --- */
+/* Écran épuré : la barre du haut et le menu disparaissent pendant la conduite sur téléphone. */
+@media (max-width: 760px) {
+  .app-driving .topbar { display: none; }
+  .app-driving .map-canvas.map-navigation-active .maplibregl-ctrl-top-right { display: none; }
+  .map-canvas.map-navigation-active .map-navigation-instruction { top: calc(12px + env(safe-area-inset-top)); right: 12px; min-height: 84px; }
+  .map-canvas.map-navigation-active .map-navigation-turn-copy strong { font-size: 32px; }
+  .map-canvas.map-navigation-active .map-navigation-turn-copy > span { font-size: 16px; line-height: 1.3; }
+  .map-canvas.map-navigation-active .map-navigation-turn-icon { width: 48px; height: 48px; }
+  .map-canvas.map-navigation-active .route-controls-legend { top: calc(108px + env(safe-area-inset-top)); }
+  .map-canvas.map-navigation-active.has-lanes .route-controls-legend { top: calc(168px + env(safe-area-inset-top)); }
+}
+.map-canvas.map-navigation-active .route-controls-legend small { display: none; }
+
+/* Paysage sur téléphone (support voiture) : guidage à gauche, vitesses à droite, carte au centre. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .app-driving .topbar, .app-driving .sidebar, .app-driving .sidebar-backdrop { display: none; }
+  .app-driving .workspace { gap: 0; padding: 0; }
+  .app-driving .map-canvas { border-radius: 0; }
+  .app-driving .map-canvas .maplibregl-ctrl-top-right { display: none; }
+  .map-canvas.map-navigation-active .map-navigation-instruction { top: calc(10px + env(safe-area-inset-top)); right: auto; left: calc(10px + env(safe-area-inset-left)); width: min(44%, 400px); min-height: 64px; padding: 8px 12px; }
+  .map-canvas.map-navigation-active .map-navigation-dashboard,
+  .map-free-drive-bar { right: auto; bottom: calc(10px + env(safe-area-inset-bottom)); left: calc(10px + env(safe-area-inset-left)); width: min(44%, 400px); min-height: 64px; padding: 8px 12px; }
+  .map-canvas.map-navigation-active .map-live-speeds { top: 50%; right: calc(16px + env(safe-area-inset-right)); }
+  .map-canvas.map-navigation-active .route-report-tools { top: 50%; left: auto; right: calc(96px + env(safe-area-inset-right)); }
+  .map-canvas.map-navigation-active .map-recenter-button { right: calc(16px + env(safe-area-inset-right)); bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .map-canvas.map-navigation-active .route-controls-legend { top: auto; right: calc(16px + env(safe-area-inset-right)); bottom: calc(76px + env(safe-area-inset-bottom)); left: auto; max-width: 40%; }
+  .route-report-menu { right: calc(100% + 10px); left: auto; }
+}
+
+/* Bouton « Arrivée estimée » : touche pour partager l'heure d'arrivée. */
+.map-navigation-dashboard > button.map-navigation-share { display: flex; width: auto; height: auto; place-items: initial; align-items: flex-start; padding: 0; color: inherit; text-align: left; background: transparent; border-radius: 8px; font: inherit; }
+.map-navigation-dashboard > button.map-navigation-share:hover { color: inherit; background: transparent; }
+.map-navigation-dashboard > button.map-navigation-share:disabled { cursor: default; }
+.map-share-feedback { position: absolute; bottom: calc(120px + env(safe-area-inset-bottom)); left: 50%; z-index: 7; margin: 0; padding: 8px 14px; color: #fff; background: rgb(20 24 31 / 88%); border-radius: var(--radius-pill); font-size: 13px; font-weight: 600; transform: translateX(-50%); white-space: nowrap; }
+
+/* --- Étape 5 : reprise du trajet --- */
+.resume-trip-banner { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 12px; left: 12px; z-index: 40; display: flex; max-width: 520px; align-items: center; gap: 12px; margin: 0 auto; padding: 10px 10px 10px 14px; color: var(--color-text); background: var(--color-surface-raised); border-radius: 14px; box-shadow: var(--shadow-sheet); animation: sheet-open 180ms ease-out; }
+.resume-trip-icon { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; color: #fff; background: var(--color-accent); border-radius: 50%; }
+.resume-trip-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.resume-trip-copy strong { font-size: 15px; }
+.resume-trip-copy span { overflow: hidden; color: var(--color-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.resume-trip-action { min-height: 44px; padding: 0 16px; color: #fff; background: var(--color-accent); border: 0; border-radius: var(--radius-pill); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.resume-trip-dismiss { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; color: var(--color-muted); background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+
+/* --- Étape 5 : conduite libre --- */
+.map-free-drive-start { position: absolute; top: 12px; left: 12px; z-index: 4; display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 0 16px; color: var(--color-text); background: var(--color-surface-raised); border: 0; border-radius: var(--radius-pill); box-shadow: var(--shadow-control); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.map-free-drive-start:hover { color: var(--color-accent); background: var(--color-accent-soft); }
+.map-free-drive-bar { position: absolute; right: 16px; bottom: calc(24px + env(safe-area-inset-bottom)); left: 16px; z-index: 4; display: flex; min-height: 72px; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; color: var(--color-text); background: var(--color-surface-raised); border-radius: 12px; box-shadow: var(--shadow-sheet); }
+.map-free-drive-icon { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; color: #fff; background: var(--color-accent); border-radius: 50%; }
+.map-free-drive-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.map-free-drive-copy strong { font-size: 16px; }
+.map-free-drive-copy span { overflow: hidden; color: var(--color-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.map-free-drive-stop { display: flex; min-height: 52px; align-items: center; gap: 6px; padding: 0 14px; color: var(--color-danger); background: var(--color-canvas); border: 0; border-radius: 12px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+@media (max-width: 760px) {
+  .map-free-drive-bar { right: 12px; bottom: calc(46px + env(safe-area-inset-bottom)); left: 12px; }
+}
+
+/* --- Étape 5 : recherche sur le trajet --- */
+.route-report-tools { display: flex; flex-direction: column; gap: 10px; }
+.along-route-panel { position: fixed; bottom: calc(12px + env(safe-area-inset-bottom)); left: 50%; z-index: 30; display: flex; width: min(calc(100% - 24px), 420px); max-height: min(70dvh, 560px); flex-direction: column; gap: 10px; padding: 14px 14px 10px; color: var(--color-text); background: var(--color-surface-raised); border-radius: 16px; box-shadow: var(--shadow-sheet); transform: translateX(-50%); animation: sheet-open 180ms ease-out; }
+.along-route-header { display: flex; align-items: center; justify-content: space-between; }
+.along-route-header strong { font-size: 17px; }
+.along-route-header button { display: grid; width: 44px; height: 44px; place-items: center; color: var(--color-muted); background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+.along-route-categories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.along-route-categories button { display: flex; min-height: 48px; align-items: center; justify-content: center; gap: 8px; color: var(--color-text); background: var(--color-canvas); border: 1px solid transparent; border-radius: 12px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.along-route-categories button.is-selected { color: var(--color-accent); background: var(--color-accent-soft); border-color: var(--color-accent); }
+.along-route-message { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: var(--color-muted); font-size: 14px; }
+.along-route-message.is-error { color: var(--color-danger); }
+.along-route-results { display: flex; min-height: 0; flex-direction: column; gap: 4px; margin: 0; padding: 0; overflow-y: auto; list-style: none; overscroll-behavior: contain; }
+.along-route-results li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--color-line); }
+.along-route-index, .along-route-marker { display: grid; width: 26px; height: 26px; flex: 0 0 auto; place-items: center; color: #fff; background: var(--color-accent); border-radius: 50%; font-size: 13px; font-weight: 700; }
+.along-route-marker { border: 2px solid #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 30%); }
+.along-route-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.along-route-copy strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.along-route-copy span { color: var(--color-muted); font-size: 13px; }
+.along-route-results li > button { display: flex; min-height: 48px; align-items: center; gap: 6px; padding: 0 12px; color: var(--color-accent); background: var(--color-accent-soft); border: 0; border-radius: 12px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.along-route-results li > button:disabled { cursor: wait; opacity: .6; }
+.along-route-source { color: var(--color-subtle); font-size: 11px; }
+@media (min-width: 761px) {
+  .along-route-panel { bottom: 124px; left: 96px; transform: none; }
+}
