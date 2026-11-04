@@ -347,7 +347,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .profile-button, .search-status { display: none; }
   .search-wrap { width: auto; flex: 1; margin: 0; }
   .search-box { height: 48px; gap: 8px; padding: 0 10px; }
-  .search-box input { font-size: 14px; }
+  .search-box input, .departure-schedule input { font-size: 16px; }
   .mobile-menu { display: inline-grid !important; width: 44px; height: 44px; }
   .workspace { position: relative; display: block; padding: 0; touch-action: pan-y; }
   .sidebar { display: none; }
