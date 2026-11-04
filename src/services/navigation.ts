@@ -1,11 +1,14 @@
 import type { RouteStep, RouteSummary } from '../types/geocoding'
-
-const EARTH_RADIUS_METERS = 6_371_000
+import { getPointAtDistance, getRouteGeometry, getRouteProgress, type Point } from './routeGeometry'
 
 export interface NavigationGuidance {
   stepIndex: number
+  /** Distance jusqu'à la prochaine manœuvre, mesurée sur le tracé. */
   distanceToStep: number
+  /** Écart entre la position et le tracé (projection sur les tronçons). */
   distanceFromRoute: number
+  /** Distance parcourue depuis le départ, en mètres. */
+  along: number
 }
 
 export interface RemainingRouteMetrics {
@@ -15,27 +18,86 @@ export interface RemainingRouteMetrics {
 
 export type ManeuverDirection = 'straight' | 'left' | 'right' | 'uturn' | 'roundabout'
 
+/** Une manœuvre est considérée comme passée quand on est à moins de cette distance. */
+const MANEUVER_PASSED_METERS = 5
+
+interface RouteTimeline {
+  /** Distance depuis le départ de chaque manœuvre. */
+  stepAlong: number[]
+  /** Morceaux du trajet avec leur durée, pour estimer le temps restant. */
+  spans: { start: number; end: number; duration: number }[]
+}
+
+const timelineCache = new WeakMap<RouteSummary, RouteTimeline>()
+
+/** Calculé une seule fois par trajet. */
+function getRouteTimeline(route: RouteSummary): RouteTimeline {
+  const cached = timelineCache.get(route)
+  if (cached) return cached
+
+  const { cumulative, total } = getRouteGeometry(route.coordinates as Point[])
+  const stepAlong = route.steps.map((step) => cumulative[step.maneuver.shapeIndex] ?? total)
+  const spans = route.steps.map((step, index) => ({
+    start: stepAlong[index],
+    end: stepAlong[index + 1] ?? total,
+    duration: step.duration,
+  }))
+  // Les manœuvres de départ sont retirées des étapes : leur durée est attribuée au début du trajet.
+  const stepsDuration = route.steps.reduce((sum, step) => sum + step.duration, 0)
+  spans.unshift({ start: 0, end: stepAlong[0] ?? total, duration: Math.max(0, route.duration - stepsDuration) })
+
+  const timeline = { stepAlong, spans }
+  timelineCache.set(route, timeline)
+  return timeline
+}
+
+/**
+ * Position sur le trajet et prochaine manœuvre.
+ * `hintAlong` (progression précédente) limite la recherche autour de la dernière position.
+ */
+export function getNavigationGuidance(
+  route: RouteSummary,
+  position: Point,
+  currentStepIndex: number,
+  hintAlong?: number,
+): NavigationGuidance {
+  const progress = getRouteProgress(route.coordinates as Point[], position, hintAlong)
+  const { stepAlong } = getRouteTimeline(route)
+  let stepIndex = Math.min(currentStepIndex, Math.max(route.steps.length - 1, 0))
+
+  while (stepIndex < route.steps.length - 1 && stepAlong[stepIndex] <= progress.along + MANEUVER_PASSED_METERS) {
+    stepIndex += 1
+  }
+
+  return {
+    stepIndex,
+    distanceToStep: Math.max(0, (stepAlong[stepIndex] ?? progress.along) - progress.along),
+    distanceFromRoute: progress.distance,
+    along: progress.along,
+  }
+}
+
 export function getRemainingRouteMetrics(
   route: RouteSummary,
   guidance: NavigationGuidance | null,
 ): RemainingRouteMetrics {
   if (!guidance) return { distance: route.distance, duration: route.duration }
 
-  const currentStep = route.steps[guidance.stepIndex]
-  if (!currentStep) return { distance: 0, duration: 0 }
-
-  const laterSteps = route.steps.slice(guidance.stepIndex + 1)
-  const currentStepProgress =
-    currentStep.distance > 0
-      ? Math.min(guidance.distanceToStep / currentStep.distance, 1)
-      : 0
-
-  return {
-    distance: guidance.distanceToStep + laterSteps.reduce((total, step) => total + step.distance, 0),
-    duration:
-      currentStep.duration * currentStepProgress +
-      laterSteps.reduce((total, step) => total + step.duration, 0),
+  const { total } = getRouteGeometry(route.coordinates as Point[])
+  const { spans } = getRouteTimeline(route)
+  const along = guidance.along
+  let duration = 0
+  for (const span of spans) {
+    if (span.end <= along) continue
+    const length = span.end - span.start
+    duration += span.start >= along || length <= 0
+      ? span.duration
+      : (span.duration * (span.end - along)) / length
   }
+
+  // La longueur du tracé diffère légèrement de celle annoncée par Valhalla : on garde son échelle.
+  const remainingRatio = total > 0 ? Math.max(0, total - along) / total : 0
+  return { distance: route.distance * remainingRatio, duration }
 }
 
 export function getManeuverDirection(step?: RouteStep): ManeuverDirection {
@@ -58,56 +120,13 @@ export function getManeuverDirection(step?: RouteStep): ManeuverDirection {
   }
 }
 
-export function getRouteBearing(
-  route: RouteSummary,
-  position: [longitude: number, latitude: number],
-): number | null {
-  const nearestIndex = findNearestCoordinateIndex(route.coordinates, position)
-
-  for (let index = nearestIndex + 1; index < route.coordinates.length; index += 1) {
-    if (distanceBetween(route.coordinates[nearestIndex], route.coordinates[index]) > 5) {
-      return calculateBearing(route.coordinates[nearestIndex], route.coordinates[index])
-    }
-  }
-
-  for (let index = nearestIndex - 1; index >= 0; index -= 1) {
-    if (distanceBetween(route.coordinates[index], route.coordinates[nearestIndex]) > 5) {
-      return calculateBearing(route.coordinates[index], route.coordinates[nearestIndex])
-    }
-  }
-
-  return null
-}
-
-export function getNavigationGuidance(
-  route: RouteSummary,
-  position: [longitude: number, latitude: number],
-  currentStepIndex: number,
-): NavigationGuidance {
-  const nearestPosition = findNearestCoordinate(route.coordinates, position)
-  const positionIndex = nearestPosition.index
-  let stepIndex = Math.min(currentStepIndex, Math.max(route.steps.length - 1, 0))
-
-  while (
-    stepIndex < route.steps.length - 1 &&
-    positionIndex >= findNearestCoordinateIndex(route.coordinates, route.steps[stepIndex].maneuver.location)
-  ) {
-    stepIndex += 1
-  }
-
-  const maneuverIndex = findNearestCoordinateIndex(
-    route.coordinates,
-    route.steps[stepIndex].maneuver.location,
-  )
-  const startIndex = Math.min(positionIndex, maneuverIndex)
-  const endIndex = Math.max(positionIndex, maneuverIndex)
-  let distanceToStep = 0
-
-  for (let index = startIndex; index < endIndex; index += 1) {
-    distanceToStep += distanceBetween(route.coordinates[index], route.coordinates[index + 1])
-  }
-
-  return { stepIndex, distanceToStep, distanceFromRoute: nearestPosition.distance }
+/** Cap du trajet à l'endroit où se trouve l'utilisateur (vers un point 20 m plus loin). */
+export function getRouteBearing(route: RouteSummary, along: number): number | null {
+  const coordinates = route.coordinates as Point[]
+  const { total } = getRouteGeometry(coordinates)
+  if (total < 5) return null
+  const from = Math.min(along, total - 5)
+  return calculateBearing(getPointAtDistance(coordinates, from), getPointAtDistance(coordinates, from + 20))
 }
 
 export function formatManeuver(step: RouteStep): string {
@@ -176,54 +195,12 @@ function formatOrdinal(value: number): string {
   return value === 1 ? '1re' : `${value}e`
 }
 
-function findNearestCoordinateIndex(
-  coordinates: [longitude: number, latitude: number][],
-  position: [longitude: number, latitude: number],
-): number {
-  return findNearestCoordinate(coordinates, position).index
-}
-
-function findNearestCoordinate(
-  coordinates: [longitude: number, latitude: number][],
-  position: [longitude: number, latitude: number],
-): { index: number; distance: number } {
-  let nearestIndex = 0
-  let nearestDistance = Number.POSITIVE_INFINITY
-
-  for (let index = 0; index < coordinates.length; index += 1) {
-    const distance = distanceBetween(coordinates[index], position)
-    if (distance < nearestDistance) {
-      nearestDistance = distance
-      nearestIndex = index
-    }
-  }
-
-  return { index: nearestIndex, distance: nearestDistance }
-}
-
-function distanceBetween(
-  first: [longitude: number, latitude: number],
-  second: [longitude: number, latitude: number],
-): number {
-  const latitudeDifference = toRadians(second[1] - first[1])
-  const longitudeDifference = toRadians(second[0] - first[0])
-  const firstLatitude = toRadians(first[1])
-  const secondLatitude = toRadians(second[1])
-  const haversine =
-    Math.sin(latitudeDifference / 2) ** 2 +
-    Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDifference / 2) ** 2
-
-  return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine))
-}
 
 function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180
 }
 
-function calculateBearing(
-  from: [longitude: number, latitude: number],
-  to: [longitude: number, latitude: number],
-): number {
+function calculateBearing(from: Point, to: Point): number {
   const fromLatitude = toRadians(from[1])
   const toLatitude = toRadians(to[1])
   const longitudeDifference = toRadians(to[0] - from[0])

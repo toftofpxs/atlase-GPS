@@ -93,6 +93,8 @@ function parseValhallaTrip(trip: ValhallaTrip, error?: string): RouteSummary {
       coordinates.length > 0 &&
       coordinates[coordinates.length - 1][0] === legCoordinates[0][0] &&
       coordinates[coordinates.length - 1][1] === legCoordinates[0][1]
+    // Index du premier point de cette étape dans le tracé complet.
+    const legOffset = coordinates.length - (sharesBoundary ? 1 : 0)
     coordinates.push(...legCoordinates.slice(sharesBoundary ? 1 : 0))
 
     steps.push(
@@ -109,6 +111,7 @@ function parseValhallaTrip(trip: ValhallaTrip, error?: string): RouteSummary {
               type,
               modifier,
               location: legCoordinates[maneuver.begin_shape_index],
+              shapeIndex: legOffset + maneuver.begin_shape_index,
             },
           }
         }),

@@ -23,6 +23,8 @@ export interface RouteStep {
     type: string
     modifier?: string
     location: [longitude: number, latitude: number]
+    /** Index du point de la manœuvre dans RouteSummary.coordinates. */
+    shapeIndex: number
     exit?: number
   }
 }

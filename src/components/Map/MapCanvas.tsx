@@ -27,12 +27,10 @@ import {
   getUpcomingControls,
   type RouteControl,
 } from '../../services/routeControls'
-import { getRouteProgress } from '../../services/routeGeometry'
-import { getSpeedLimit } from '../../services/speedLimit'
+import { getRouteSpeedLimits, getSpeedLimitAt, type SpeedLimitSpan } from '../../services/routeSpeedLimits'
 import {
   formatManeuver,
   getManeuverDirection,
-  getNavigationGuidance,
   getRemainingRouteMetrics,
   getRouteBearing,
 } from '../../services/navigation'
@@ -58,9 +56,6 @@ export function MapCanvas() {
   const routeControlMarkerRefs = useRef<Map<string, MapLibreMarker>>(new Map())
   const currentPositionMarkerRef = useRef<MapLibreMarker | null>(null)
   const routeReportMarkerRefs = useRef(new Map<string, MapLibreMarker>())
-  const speedLimitRequestRef = useRef<AbortController | null>(null)
-  const speedLimitTimeoutRef = useRef<number | null>(null)
-  const lastSpeedLimitLookupRef = useRef<{ coordinates: [number, number]; time: number } | null>(null)
   const [status, setStatus] = useState<MapStatus>('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -70,8 +65,8 @@ export function MapCanvas() {
   const [reportMode, setReportMode] = useState<RouteReportType | null>(null)
   const [reportMenuOpen, setReportMenuOpen] = useState(false)
   const [reportError, setReportError] = useState('')
-  const [speedLimit, setSpeedLimit] = useState<number | null>(null)
-  const [speedLimitStatus, setSpeedLimitStatus] = useState<SpeedLimitStatus>('idle')
+  const [routeSpeedLimits, setRouteSpeedLimits] = useState<SpeedLimitSpan[] | null>(null)
+  const [speedLimitsStatus, setSpeedLimitsStatus] = useState<SpeedLimitStatus>('idle')
   const [routeControls, setRouteControls] = useState<RouteControl[]>([])
   const [routeControlsStatus, setRouteControlsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [routeControlsRetry, setRouteControlsRetry] = useState(0)
@@ -87,17 +82,15 @@ export function MapCanvas() {
   const movementIcon = useInterfaceStore((state) => state.movementIcon)
   const resolvedTheme = useInterfaceStore((state) => state.resolvedTheme)
   const navigationStepIndex = useInterfaceStore((state) => state.navigationStepIndex)
+  // Calculé une seule fois par position GPS (dans RoutePanel), pas à chaque rendu.
+  const guidance = useInterfaceStore((state) => state.navigationGuidance)
   const navigationError = useInterfaceStore((state) => state.navigationError)
   const favorites = useInterfaceStore((state) => state.favorites)
   const stopNavigation = useInterfaceStore((state) => state.stopNavigation)
   const isDarkMapStyle = resolvedTheme === 'dark'
   const resolvedThemeRef = useRef(resolvedTheme)
   resolvedThemeRef.current = resolvedTheme
-  const guidance =
-    route && currentPosition
-      ? getNavigationGuidance(route, currentPosition.coordinates, navigationStepIndex)
-      : null
-  const remaining = route ? getRemainingRouteMetrics(route, guidance) : null
+  const remaining = useMemo(() => (route ? getRemainingRouteMetrics(route, guidance) : null), [route, guidance])
   const currentStep = route?.steps[guidance?.stepIndex ?? navigationStepIndex]
   const direction = getManeuverDirection(currentStep)
   const DirectionIcon = getDirectionIcon(direction)
@@ -110,13 +103,13 @@ export function MapCanvas() {
   // Distance parcourue sur le trajet. Si l'utilisateur est loin du trajet
   // (aperçu avant le départ, écart GPS), on garde la dernière valeur connue.
   const routeProgressRef = useRef<{ route: typeof route; along: number }>({ route: null, along: 0 })
-  const routeProgress = useMemo(() => {
-    const previous = routeProgressRef.current.route === route ? routeProgressRef.current.along : 0
-    if (!route || !currentPosition) return previous
-    const progress = getRouteProgress(route.coordinates, currentPosition.coordinates)
-    return progress.distance <= 100 ? progress.along : previous
-  }, [route, currentPosition])
+  const previousProgress = routeProgressRef.current.route === route ? routeProgressRef.current.along : 0
+  const routeProgress = guidance && guidance.distanceFromRoute <= 100 ? guidance.along : previousProgress
   routeProgressRef.current = { route, along: routeProgress }
+  const speedLimit =
+    routeSpeedLimits && guidance && !offRoute ? getSpeedLimitAt(routeSpeedLimits, guidance.along) : null
+  const speedLimitStatus: SpeedLimitStatus =
+    speedLimitsStatus === 'available' && speedLimit === null ? 'unavailable' : speedLimitsStatus
   // Ne change que tous les CONTROLS_REFETCH_STEP_METERS : c'est ce qui déclenche une nouvelle recherche.
   const controlsFetchFrom =
     Math.floor(routeProgress / CONTROLS_REFETCH_STEP_METERS) * CONTROLS_REFETCH_STEP_METERS
@@ -528,64 +521,32 @@ export function MapCanvas() {
     }
   }, [currentPosition, movementIcon, status])
 
+  // Limitations de vitesse : une seule requête Valhalla pour tout le trajet, au démarrage de la navigation.
   useEffect(() => {
-    if (!navigationActive || !currentPosition) return
-
-    const now = Date.now()
-    const lastLookup = lastSpeedLimitLookupRef.current
-    const movedDistance = lastLookup
-      ? getCoordinatesDistance(lastLookup.coordinates, currentPosition.coordinates)
-      : Number.POSITIVE_INFINITY
-    if (
-      speedLimitRequestRef.current ||
-      (lastLookup && now - lastLookup.time < 20_000) ||
-      (lastLookup && movedDistance < 100 && now - lastLookup.time < 60_000)
-    ) {
+    if (!navigationActive || !route) {
+      setRouteSpeedLimits(null)
+      setSpeedLimitsStatus('idle')
       return
     }
 
     const controller = new AbortController()
-    speedLimitRequestRef.current = controller
-    lastSpeedLimitLookupRef.current = { coordinates: currentPosition.coordinates, time: now }
-    setSpeedLimitStatus('loading')
-    const timeout = window.setTimeout(() => {
-      if (speedLimitRequestRef.current !== controller) return
-      setSpeedLimit(null)
-      setSpeedLimitStatus('unavailable')
-      controller.abort()
-    }, 15_000)
-    speedLimitTimeoutRef.current = timeout
-
-    void getSpeedLimit(currentPosition.coordinates, controller.signal)
-      .then((limit) => {
+    setSpeedLimitsStatus('loading')
+    void getRouteSpeedLimits(route, controller.signal)
+      .then((spans) => {
         if (controller.signal.aborted) return
-        setSpeedLimit(limit)
-        setSpeedLimitStatus(limit === null ? 'unavailable' : 'available')
+        setRouteSpeedLimits(spans)
+        setSpeedLimitsStatus('available')
       })
       .catch(() => {
-        if (controller.signal.aborted) return
-        setSpeedLimit(null)
-        setSpeedLimitStatus('unavailable')
+        if (!controller.signal.aborted) setSpeedLimitsStatus('unavailable')
       })
-      .finally(() => {
-        window.clearTimeout(timeout)
-        if (speedLimitTimeoutRef.current === timeout) speedLimitTimeoutRef.current = null
-        if (speedLimitRequestRef.current === controller) speedLimitRequestRef.current = null
-      })
-  }, [currentPosition, navigationActive])
+
+    return () => controller.abort()
+  }, [navigationActive, route])
 
   useEffect(() => {
     if (navigationActive) return
 
-    if (speedLimitTimeoutRef.current !== null) {
-      window.clearTimeout(speedLimitTimeoutRef.current)
-      speedLimitTimeoutRef.current = null
-    }
-    speedLimitRequestRef.current?.abort()
-    speedLimitRequestRef.current = null
-    lastSpeedLimitLookupRef.current = null
-    setSpeedLimit(null)
-    setSpeedLimitStatus('idle')
     setReportMode(null)
     setReportMenuOpen(false)
     setRouteReports([])
@@ -593,11 +554,6 @@ export function MapCanvas() {
     routeReportMarkerRefs.current.forEach((marker) => marker.remove())
     routeReportMarkerRefs.current.clear()
   }, [navigationActive])
-
-  useEffect(() => () => {
-    if (speedLimitTimeoutRef.current !== null) window.clearTimeout(speedLimitTimeoutRef.current)
-    speedLimitRequestRef.current?.abort()
-  }, [])
 
   useEffect(() => {
     const map = mapRef.current
@@ -701,7 +657,7 @@ export function MapCanvas() {
     wasNavigationActiveRef.current = true
     if (!currentPosition || !followingPosition) return
 
-    const routeBearing = route ? getRouteBearing(route, currentPosition.coordinates) : null
+    const routeBearing = route && guidance ? getRouteBearing(route, guidance.along) : null
     const bearing = currentPosition.heading ?? routeBearing ?? map.getBearing()
     map.easeTo({
       center: currentPosition.coordinates,
@@ -1082,18 +1038,6 @@ function formatArrivalTime(duration: number): string {
   )
 }
 
-
-function getCoordinatesDistance(first: [number, number], second: [number, number]): number {
-  const radians = Math.PI / 180
-  const latitudeDelta = (second[1] - first[1]) * radians
-  const longitudeDelta = (second[0] - first[0]) * radians
-  const latitude1 = first[1] * radians
-  const latitude2 = second[1] * radians
-  const haversine =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(latitude1) * Math.cos(latitude2) * Math.sin(longitudeDelta / 2) ** 2
-  return 6_371_000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine))
-}
 
 function getRouteReportLabel(type: RouteReportType): string {
   switch (type) {

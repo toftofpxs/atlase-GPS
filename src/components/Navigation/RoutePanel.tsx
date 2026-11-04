@@ -95,7 +95,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const setDestination = useInterfaceStore((state) => state.setDestination)
   const startNavigation = useInterfaceStore((state) => state.startNavigation)
   const stopNavigation = useInterfaceStore((state) => state.stopNavigation)
-  const setCurrentPosition = useInterfaceStore((state) => state.setCurrentPosition)
+  const updateNavigationPosition = useInterfaceStore((state) => state.updateNavigationPosition)
   const setNavigationError = useInterfaceStore((state) => state.setNavigationError)
   const setNavigationStepIndex = useInterfaceStore((state) => state.setNavigationStepIndex)
   const toggleFavorite = useInterfaceStore((state) => state.toggleFavorite)
@@ -164,13 +164,14 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     setNavigationError(null)
     setNavigationStepIndex(0)
     let stepIndex = 0
+    let lastAlong: number | undefined
     const watchId = watchCurrentLocation(
       (position) => {
-        setCurrentPosition(position)
-        setNavigationError(null)
-        const guidance = getNavigationGuidance(route, position.coordinates, stepIndex)
+        // Calcul unique par position GPS : MapCanvas lit le résultat dans le store.
+        const guidance = getNavigationGuidance(route, position.coordinates, stepIndex, lastAlong)
         stepIndex = guidance.stepIndex
-        setNavigationStepIndex(guidance.stepIndex)
+        lastAlong = guidance.along
+        updateNavigationPosition(position, guidance)
       },
       (error) => {
         setNavigationError(
@@ -182,7 +183,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     )
 
     return () => navigator.geolocation.clearWatch(watchId)
-  }, [navigationActive, route, setCurrentPosition, setNavigationError, setNavigationStepIndex, stopNavigation])
+  }, [navigationActive, route, updateNavigationPosition, setNavigationError, setNavigationStepIndex, stopNavigation])
 
   const handleUseCurrentLocation = async () => {
     setLocationDialogClosing(true)
