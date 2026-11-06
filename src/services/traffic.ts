@@ -1,6 +1,6 @@
 // Trafic en temps réel TomTom (Traffic API, tuiles vectorielles « Vector Flow Tiles » v4).
-// Les tuiles passent par /api/traffic/flow/… : proxy Vite en dev, fonction Netlify en prod,
-// pour que la clé TomTom ne soit jamais envoyée au navigateur.
+// Les tuiles passent par /api/traffic : proxy Vite en dev, fonction serveur en prod (Vercel : api/traffic.ts,
+// Netlify : netlify/functions/traffic.mts), pour que la clé TomTom ne soit jamais envoyée au navigateur.
 
 /**
  * Zoom minimum de la couche trafic. Dézoomé, TomTom ne renvoie que les grands axes
@@ -24,5 +24,5 @@ export const TRAFFIC_SOURCE_LAYER = 'Traffic flow'
  */
 export function getTrafficTileUrl(now = Date.now()): string {
   const version = Math.floor(now / TRAFFIC_REFRESH_MS)
-  return `${window.location.origin}/api/traffic/flow/{z}/{x}/{y}.pbf?v=${version}`
+  return `${window.location.origin}/api/traffic?z={z}&x={x}&y={y}&v=${version}`
 }

@@ -36,25 +36,26 @@ export default defineConfig(({ mode }) => {
     server: {
       allowedHosts: ['weak-yaks-fold.loca.lt'],
       proxy: {
-        // En dev, les tuiles /api/traffic/flow/{z}/{x}/{y}.pbf sont relayées vers TomTom avec la clé ajoutée ici.
-        // En prod, c'est la fonction Netlify netlify/functions/traffic.mts qui fait la même chose.
-        // Recherche le long du trajet (TomTom) : en prod, netlify/functions/along-route.mts.
+        // En dev, les appels /api/… sont relayés vers TomTom avec la clé ajoutée ici.
+        // En prod, ce sont les fonctions serveur qui le font (Vercel : api/*.ts, Netlify : netlify/functions/*.mts).
+        // Recherche le long du trajet (sans mot-clé : la catégorie suffit).
         '/api/along-route': {
           target: 'https://api.tomtom.com',
           changeOrigin: true,
-          rewrite: (path) =>
-            path.replace(/^\/api\/along-route\/([^/?]*)\.json(\?.*)?$/, (_match, query: string, search = '') =>
-              `/search/2/searchAlongRoute/${query}.json${search ? `${search}&` : '?'}key=${apiKey}`,
-            ),
+          rewrite: (path) => {
+            const search = path.includes('?') ? path.slice(path.indexOf('?')) : ''
+            return `/search/2/searchAlongRoute/.json${search ? `${search}&` : '?'}key=${apiKey}`
+          },
         },
+        // Tuiles de trafic : /api/traffic?z=…&x=…&y=…
         '/api/traffic': {
           target: 'https://api.tomtom.com',
           changeOrigin: true,
-          rewrite: (path) =>
-            path.replace(
-              /^\/api\/traffic\/flow\/(\d+)\/(\d+)\/(\d+)\.pbf(\?.*)?$/,
-              `/traffic/map/4/tile/flow/relative/$1/$2/$3.pbf?key=${apiKey}`,
-            ),
+          rewrite: (path) => {
+            const tile = (name: string) => path.match(new RegExp('[?&]' + name + '=(\\d+)'))?.[1] ?? '0'
+            const [z, x, y] = [tile('z'), tile('x'), tile('y')]
+            return `/traffic/map/4/tile/flow/relative/${z}/${x}/${y}.pbf?key=${apiKey}`
+          },
         },
       },
     },

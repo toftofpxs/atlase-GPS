@@ -1,6 +1,7 @@
 // Recherche de lieux sur l'itinéraire, devant la position (stations, recharge, parkings, aires).
 // D'abord TomTom « Along Route Search » (rapide, trié par temps de détour), via /api/along-route
-// pour garder la clé côté serveur. En secours : OpenStreetMap via Overpass, comme les STOP.
+// (fonction serveur : api/along-route.ts sur Vercel) pour garder la clé côté serveur.
+// En secours : OpenStreetMap via Overpass, comme les STOP.
 import type { RouteSummary } from '../types/geocoding'
 import { fetchOverpass, simplifyLine, type OverpassElement } from './routeControls'
 import { getPointAtDistance, getRouteGeometry, getRouteProgress, type Point } from './routeGeometry'
@@ -113,8 +114,7 @@ async function searchWithTomTom(
     categorySet: TOMTOM_CATEGORIES[category],
     language: 'fr-FR',
   })
-  // Requête sans mot-clé : la catégorie suffit, et donne plus de résultats qu'un mot comme « station ».
-  const response = await fetch(`/api/along-route/.json?${params}`, {
+  const response = await fetch(`/api/along-route?${params}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ route: { points: line.map(([lon, lat]) => ({ lat, lon })) } }),

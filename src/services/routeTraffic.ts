@@ -81,7 +81,7 @@ export async function getRouteTraffic(
   const worker = async () => {
     while (queue.length > 0) {
       const [x, y] = queue.shift() as [number, number]
-      const response = await fetch(`/api/traffic/flow/${TILE_ZOOM}/${x}/${y}.pbf?v=${version}`, { signal })
+      const response = await fetch(`/api/traffic?z=${TILE_ZOOM}&x=${x}&y=${y}&v=${version}`, { signal })
       if (!response.ok) throw new Error(`Tuile trafic ${x}/${y} : ${response.status}`)
       segments.push(...decodeTile(new Uint8Array(await response.arrayBuffer()), x, y))
     }
