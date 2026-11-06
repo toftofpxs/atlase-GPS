@@ -783,3 +783,45 @@ div.nav-sheet-summary { cursor: default; }
   :where(button, a, [role='option']):not(:disabled):active { scale: none; }
   .search-results li, .route-choice, .along-route-results li, .route-summary, .nav-banner-main, .nav-fabs > * { animation: none; }
 }
+
+/* ===== Ma voiture (emplacement de stationnement) ===== */
+.map-quick-actions { position: absolute; top: 12px; left: 12px; z-index: 4; display: flex; max-width: calc(100% - 80px); flex-wrap: wrap; gap: 8px; pointer-events: none; }
+.map-quick-actions > * { pointer-events: auto; }
+.map-quick-actions .map-free-drive-start { position: static; }
+.parked-car-chip { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 0 16px; color: var(--color-text); background: var(--color-surface-raised); border: 0; border-radius: var(--radius-pill); box-shadow: var(--shadow-control); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.parked-car-chip:hover { color: var(--color-accent); background: var(--color-accent-soft); }
+.parked-car-chip.has-car svg { color: #5b4bd6; }
+:root[data-theme='dark'] .parked-car-chip.has-car svg { color: #a99cff; }
+
+/* Repère « P » sur la carte, en forme d'épingle. */
+.parked-car-marker { display: grid; width: 38px; height: 38px; place-items: center; padding: 0; color: #fff; background: #5b4bd6; border: 3px solid #fff; border-radius: 50% 50% 50% 6px; box-shadow: 0 3px 10px rgb(0 0 0 / 35%); cursor: pointer; rotate: -45deg; animation: parked-pin-drop 420ms cubic-bezier(.2, 1.4, .4, 1) both; }
+.parked-car-marker span { rotate: 45deg; font-size: 17px; font-weight: 800; line-height: 1; }
+@keyframes parked-pin-drop { from { opacity: 0; translate: 0 -24px; } to { opacity: 1; translate: 0 0; } }
+
+/* Fiche « Ma voiture » : même présentation que « Sur le trajet ». */
+.parked-car-panel { position: fixed; bottom: calc(12px + env(safe-area-inset-bottom)); left: 50%; z-index: 30; display: flex; width: min(calc(100% - 24px), 420px); flex-direction: column; gap: 12px; padding: 14px; color: var(--color-text); background: var(--color-surface-raised); border-radius: 16px; box-shadow: var(--shadow-sheet); transform: translateX(-50%); animation: sheet-open 200ms ease-out; }
+.parked-car-header { display: flex; align-items: center; gap: 12px; }
+.parked-car-badge, .parked-car-prompt-icon { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; color: #fff; background: #5b4bd6; border-radius: 12px; font-size: 20px; font-weight: 800; }
+.parked-car-title { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.parked-car-title strong { font-size: 17px; }
+.parked-car-title span { color: var(--color-muted); font-size: 13px; }
+.parked-car-close, .parked-car-prompt-close { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; color: var(--color-muted); background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+.parked-car-actions { display: flex; flex-direction: column; gap: 8px; }
+.parked-car-actions button { display: flex; min-height: 48px; align-items: center; justify-content: center; gap: 8px; color: var(--color-text); background: var(--color-canvas); border: 0; border-radius: 12px; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.parked-car-actions button:disabled { cursor: wait; opacity: .6; }
+.parked-car-actions .parked-car-primary { color: #fff; background: #1a73e8; }
+.parked-car-actions .is-danger { color: var(--color-danger); }
+.parked-car-hint { margin: 0; color: var(--color-muted); font-size: 12px; text-align: center; }
+.parked-car-error { margin: 0; color: var(--color-danger); font-size: 13px; }
+
+/* Proposition « Garé ? » à la fin d'un trajet en voiture. */
+.parked-car-prompt { position: fixed; top: calc(72px + env(safe-area-inset-top)); left: 50%; z-index: 31; display: flex; width: min(calc(100% - 24px), 440px); align-items: center; gap: 10px; padding: 10px 6px 10px 12px; color: var(--color-text); background: var(--color-surface-raised); border-radius: 16px; box-shadow: var(--shadow-sheet); transform: translateX(-50%); animation: parked-prompt-in 280ms cubic-bezier(.2, .8, .2, 1) both; }
+.parked-car-prompt-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+.parked-car-prompt-copy strong { font-size: 15px; }
+.parked-car-prompt-copy span { color: var(--color-muted); font-size: 12px; }
+.parked-car-prompt-save { min-height: 40px; padding: 0 14px; color: #fff; background: #5b4bd6; border: 0; border-radius: var(--radius-pill); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+@keyframes parked-prompt-in { from { opacity: 0; translate: 0 -12px; } to { opacity: 1; translate: 0 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .parked-car-marker, .parked-car-prompt, .parked-car-panel { animation: none; }
+}

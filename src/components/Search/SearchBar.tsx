@@ -16,9 +16,9 @@ export function SearchBar() {
   const [activeIndex, setActiveIndex] = useState(-1)
   const [retryCount, setRetryCount] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const searchInitialized = useRef(false)
   const searchTarget = useInterfaceStore((state) => state.searchTarget)
   const searchRequest = useInterfaceStore((state) => state.searchRequest)
+  const initialSearchRequest = useRef(searchRequest)
   const searchStopIndex = useInterfaceStore((state) => state.searchStopIndex)
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
@@ -46,10 +46,9 @@ export function SearchBar() {
   const normalizedQuery = query.trim()
 
   useEffect(() => {
-    if (!searchInitialized.current) {
-      searchInitialized.current = true
-      return
-    }
+    // Pas d'ouverture au chargement : seulement quand une demande de recherche arrive ensuite.
+    // (On compare à la valeur initiale : en développement, React exécute les effets deux fois au montage.)
+    if (searchRequest === initialSearchRequest.current) return
 
     setQuery('')
     setResults([])

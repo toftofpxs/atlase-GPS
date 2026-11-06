@@ -52,6 +52,7 @@ import { haptic } from '../../services/haptics'
 import { useFreeDrive } from '../../hooks/useFreeDrive'
 import { applyDrivingMapLook, prefetchRouteTiles, PREFETCH_REFRESH_METERS } from '../../services/drivingMap'
 import { AlongRouteSearch } from './AlongRouteSearch'
+import { ParkedCar } from './ParkedCar'
 import { LaneGuidance } from './LaneGuidance'
 
 /** « Puis » : affiché si la manœuvre suivante est à moins de cette distance de la prochaine… */
@@ -1898,6 +1899,8 @@ export function MapCanvas() {
           </button>
         </section>
       )}
+      {/* Raccourcis en haut à gauche : conduite libre et voiture garée, sur une même ligne. */}
+      <div className="map-quick-actions">
       {!drivingActive && status === 'ready' && (
         <button
           type="button"
@@ -1914,6 +1917,8 @@ export function MapCanvas() {
           <span>Conduire</span>
         </button>
       )}
+        <ParkedCar map={mapRef.current} mapReady={status === 'ready'} drivingActive={drivingActive} />
+      </div>
       <div className="map-provider-badge">
         <span className="preview-dot" />
         OPENFREEMAP <span>·</span> OPENSTREETMAP

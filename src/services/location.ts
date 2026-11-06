@@ -57,7 +57,11 @@ export function getDistanceMeters(
   return 6_371_000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine))
 }
 
-export function getCurrentLocation(): Promise<Destination> {
+/**
+ * Position actuelle. `maximumAgeMs` : âge maximal d'une position déjà connue du téléphone
+ * (par défaut 1 minute ; mettre une valeur courte quand on s'est sûrement déplacé).
+ */
+export function getCurrentLocation(maximumAgeMs = 60_000): Promise<Destination> {
   if (!window.isSecureContext) {
     return Promise.reject(new Error('secure-context-required'))
   }
@@ -78,7 +82,7 @@ export function getCurrentLocation(): Promise<Destination> {
       (error) => {
         reject(new Error(error.code === error.PERMISSION_DENIED ? 'permission-denied' : 'unavailable'))
       },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: maximumAgeMs },
     )
   })
 }

@@ -61,3 +61,20 @@ export function getGeocodingErrorMessage(error: unknown): string {
   }
   return 'Impossible de contacter le service de recherche.'
 }
+
+/** Adresse approximative d'un point (géocodage inverse Photon), ou null si introuvable. */
+export async function reverseGeocode(
+  [longitude, latitude]: [number, number],
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const params = new URLSearchParams({ lon: String(longitude), lat: String(latitude), lang: 'fr', limit: '1' })
+  const response = await fetch(`https://photon.komoot.io/reverse?${params}`, { signal })
+  if (!response.ok) return null
+  const data = (await response.json()) as PhotonFeatureCollection
+  const properties = data.features?.[0]?.properties
+  if (!properties) return null
+  const street = [properties.housenumber, properties.street].filter(Boolean).join(' ')
+  const city = properties.city ?? properties.district ?? properties.locality
+  const label = [street || properties.name, city].filter(Boolean).join(', ')
+  return label || null
+}

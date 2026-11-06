@@ -9,6 +9,16 @@ export type MovementIcon = 'dot' | 'arrow' | 'car'
 export type ThemeMode = 'auto' | 'light' | 'dark'
 export type ResolvedTheme = Exclude<ThemeMode, 'auto'>
 export type FavoriteShortcut = 'home' | 'work' | 'school'
+/** Emplacement de la voiture garée (mémorisé dans le navigateur). */
+export interface ParkedCar {
+  coordinates: [longitude: number, latitude: number]
+  /** Précision GPS au moment de l'enregistrement, en mètres. */
+  accuracy: number | null
+  /** Date d'enregistrement (ms depuis 1970). */
+  savedAt: number
+  /** Adresse approximative (géocodage inverse), si disponible. */
+  address: string | null
+}
 export type FavoritePlace = Destination & { shortcut?: FavoriteShortcut }
 
 interface InterfaceState {
@@ -41,6 +51,7 @@ interface InterfaceState {
   navigationActive: boolean
   /** Conduite sans itinéraire : vitesse et limitation affichées, carte qui suit. */
   freeDriveActive: boolean
+  parkedCar: ParkedCar | null
   currentPosition: CurrentPosition | null
   /** Position sur le trajet, calculée une seule fois par position GPS. */
   navigationGuidance: NavigationGuidance | null
@@ -79,6 +90,7 @@ interface InterfaceState {
   applyDetour: (waypoints: Destination[], route: RouteSummary) => void
   startFreeDrive: () => void
   stopFreeDrive: () => void
+  setParkedCar: (parkedCar: ParkedCar | null) => void
   setCurrentPosition: (position: CurrentPosition | null) => void
   updateNavigationPosition: (position: CurrentPosition, guidance: NavigationGuidance) => void
   setNavigationRerouting: (rerouting: boolean) => void
@@ -131,6 +143,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
   routeRequestId: 0,
   navigationActive: false,
   freeDriveActive: false,
+  parkedCar: null,
   currentPosition: null, navigationGuidance: null,
   navigationStepIndex: 0, navigationRerouting: false,
   navigationError: null,
@@ -334,6 +347,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
   startFreeDrive: () =>
     set({ freeDriveActive: true, navigationActive: false, currentPosition: null, navigationGuidance: null, navigationError: null }),
   stopFreeDrive: () => set({ freeDriveActive: false, currentPosition: null }),
+  setParkedCar: (parkedCar) => set({ parkedCar }),
   setCurrentPosition: (currentPosition) => set({ currentPosition }),
   setNavigationRerouting: (navigationRerouting) => set({ navigationRerouting }),
   applyReroute: (route) => {
@@ -376,6 +390,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
   storage: createJSONStorage(() => localStorage),
   partialize: (state) => ({
     favorites: state.favorites,
+    parkedCar: state.parkedCar,
     movementIcon: state.movementIcon,
     hapticsEnabled: state.hapticsEnabled,
     offlineMapEnabled: state.offlineMapEnabled,
