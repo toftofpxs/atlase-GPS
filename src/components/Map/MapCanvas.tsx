@@ -186,6 +186,7 @@ export function MapCanvas() {
   const navigationRerouting = useInterfaceStore((state) => state.navigationRerouting)
   // Lu par l'effet du tracé sans le relancer : pas de recadrage sur tout le trajet en pleine navigation.
   const navigationActiveRef = useRef(navigationActive)
+  const animatedRouteOptionsRef = useRef<unknown>(null)
   navigationActiveRef.current = navigationActive
   const currentPosition = useInterfaceStore((state) => state.currentPosition)
   const movementIcon = useInterfaceStore((state) => state.movementIcon)
@@ -1411,14 +1412,46 @@ export function MapCanvas() {
       })),
     }
 
+    // Animation d'apparition : seulement pour une nouvelle liste d'itinéraires, hors navigation,
+    // et si l'appareil ne demande pas de réduire les animations.
+    const routeList = routeOptions.length > 0 ? routeOptions : route
+    const animateDrawing =
+      animatedRouteOptionsRef.current !== routeList &&
+      !navigationActiveRef.current &&
+      !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    animatedRouteOptionsRef.current = routeList
+    const partialRouteData = (progress: number) => ({
+      ...routeData,
+      features: routeData.features.map((feature) => {
+        const coordinates = feature.geometry.coordinates
+        const count = Math.max(2, Math.ceil(coordinates.length * progress))
+        return { ...feature, geometry: { ...feature.geometry, coordinates: coordinates.slice(0, count) } }
+      }),
+    })
+    let drawFrame = 0
+
     try {
+      const initialData = animateDrawing ? partialRouteData(0) : routeData
       const source = map.getSource(sourceId)
       if (source && 'setData' in source && typeof source.setData === 'function') {
-        source.setData(routeData)
+        source.setData(initialData)
       } else if (!source) {
-        map.addSource(sourceId, { type: 'geojson', data: routeData })
+        map.addSource(sourceId, { type: 'geojson', data: initialData })
       } else {
         throw new Error('Une source cartographique incompatible utilise déjà cet identifiant.')
+      }
+      if (animateDrawing) {
+        const startTime = performance.now()
+        const DRAW_DURATION_MS = 900
+        const step = (now: number) => {
+          const routeSource = map.getSource(sourceId)
+          if (!routeSource || !('setData' in routeSource) || typeof routeSource.setData !== 'function') return
+          const linear = Math.min(1, (now - startTime) / DRAW_DURATION_MS)
+          const eased = 1 - (1 - linear) ** 3
+          routeSource.setData(linear < 1 ? partialRouteData(eased) : routeData)
+          if (linear < 1) drawFrame = window.requestAnimationFrame(step)
+        }
+        drawFrame = window.requestAnimationFrame(step)
       }
 
       const firstSymbolLayer = map.getStyle().layers?.find((layer) => layer.type === 'symbol')?.id
@@ -1485,6 +1518,8 @@ export function MapCanvas() {
       setErrorMessage(error instanceof Error ? error.message : 'Impossible d’afficher le trajet sur la carte.')
       setStatus('error')
     }
+
+    return () => window.cancelAnimationFrame(drawFrame)
   }, [isDarkMapStyle, mapViewportMobile, route, routeOptions, selectedRouteIndex, status])
 
   // Légende feux/STOP : sous le bandeau en navigation, dans un coin de la carte sinon.
@@ -1572,7 +1607,7 @@ export function MapCanvas() {
                   Vous êtes à {formatDistance(guidance.distanceFromRoute)} de l’itinéraire.
                 </p>
               ) : guidance && currentStep ? (
-                <div className="nav-banner-main">
+                <div className="nav-banner-main" key={guidance.stepIndex}>
                   <span className="nav-banner-turn">
                     <ManeuverIcon size={40} strokeWidth={2.8} aria-hidden="true" />
                     <span className="nav-banner-distance">

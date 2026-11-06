@@ -723,3 +723,63 @@ div.nav-sheet-summary { cursor: default; }
 .along-route-copy .along-route-price em { padding: 1px 6px; color: #fff; background: #1e8e3e; border-radius: var(--radius-pill); font-size: 11px; font-style: normal; font-weight: 700; }
 .along-route-copy .along-route-price small { color: var(--color-subtle); font-size: 11px; }
 .along-route-copy .along-route-price.is-muted { color: var(--color-subtle); }
+
+/* ===== Expérience mobile : toucher, mise en avant, animations ===== */
+
+/* Pas de flash gris au toucher (Android) : on donne notre propre retour visuel. */
+* { -webkit-tap-highlight-color: transparent; }
+/* Bouton qui s'enfonce légèrement sous le doigt (propriété « scale » : ne gêne pas les « transform » existants). */
+:where(button, a, [role='option']) { transition: scale 120ms ease-out; }
+@media (hover: none) {
+  :where(button, a, [role='option']):not(:disabled):active { scale: 0.96; }
+}
+
+/* Thème sombre : texte foncé sur le bleu clair des boutons principaux (le blanc était presque illisible). */
+:root[data-theme='dark'] .primary-button { color: #0b1f3f; }
+
+/* « Démarrer la navigation » : l'action principale, plus visible, et toujours accessible en bas du panneau. */
+.primary-button.navigation-start,
+:root[data-theme='dark'] .primary-button.navigation-start {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  min-height: 52px;
+  color: #fff;
+  background: #1a73e8;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 6px 18px rgb(26 115 232 / 35%);
+  font-size: 16px;
+}
+
+/* Recherche : résultats sur toute la largeur de l'écran, pour ne plus tronquer les noms. */
+@media (max-width: 760px) {
+  .search-dropdown { position: fixed; top: 68px; right: 12px; left: 12px; }
+}
+
+/* Listes : les éléments apparaissent en cascade. */
+@keyframes list-item-in { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
+.search-results li, .route-choice, .along-route-results li { animation: list-item-in 240ms cubic-bezier(.2, .8, .2, 1) both; }
+.search-results li:nth-child(2), .route-choice:nth-of-type(2), .along-route-results li:nth-child(2) { animation-delay: 40ms; }
+.search-results li:nth-child(3), .route-choice:nth-of-type(3), .along-route-results li:nth-child(3) { animation-delay: 80ms; }
+.search-results li:nth-child(4), .along-route-results li:nth-child(4) { animation-delay: 120ms; }
+.search-results li:nth-child(5), .along-route-results li:nth-child(5) { animation-delay: 160ms; }
+.search-results li:nth-child(n + 6), .along-route-results li:nth-child(n + 6) { animation-delay: 200ms; }
+
+/* Résumé du trajet : apparaît en douceur une fois l'itinéraire calculé. */
+.route-summary { animation: list-item-in 280ms cubic-bezier(.2, .8, .2, 1) both; }
+
+/* Bandeau de navigation : la nouvelle manœuvre glisse depuis la droite. */
+@keyframes maneuver-in { from { opacity: 0; translate: 24px 0; } to { opacity: 1; translate: 0 0; } }
+.nav-banner-main { animation: maneuver-in 260ms cubic-bezier(.2, .8, .2, 1) both; }
+
+/* Boutons ronds de conduite : apparition légère au démarrage. */
+@keyframes fab-in { from { opacity: 0; scale: 0.8; } to { opacity: 1; scale: 1; } }
+.nav-fabs > * { animation: fab-in 220ms cubic-bezier(.2, .8, .2, 1) both; }
+.nav-fabs > :nth-child(2) { animation-delay: 50ms; }
+.nav-fabs > :nth-child(3) { animation-delay: 100ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, a, [role='option']) { transition: none; }
+  :where(button, a, [role='option']):not(:disabled):active { scale: none; }
+  .search-results li, .route-choice, .along-route-results li, .route-summary, .nav-banner-main, .nav-fabs > * { animation: none; }
+}

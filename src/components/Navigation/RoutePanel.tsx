@@ -98,6 +98,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('half')
   const mobilePanelCollapsed = sheetSnap === 'collapsed'
   const sheetRef = useRef<HTMLElement | null>(null)
+  const routeSummaryRef = useRef<HTMLDivElement | null>(null)
   const sheetDrag = useRef<SheetDrag | null>(null)
   const ignoreHandleClick = useRef(false)
   const [locating, setLocating] = useState(false)
@@ -434,6 +435,27 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     setTollPreference(preference)
     if (hasRoute) void handleCalculateRoute(preference)
   }
+
+  // Calcul automatique dès que départ et destination sont connus, comme sur Google Maps ou Waze.
+  // Le store efface l'itinéraire (et l'erreur) à chaque changement de départ, destination, étape ou mode :
+  // cet effet se relance alors tout seul. Après une erreur, on attend un nouveau choix ou le bouton.
+  useEffect(() => {
+    if (!origin || !destination || route || routeLoading || routeError || navigationActive) return
+    const timer = window.setTimeout(() => void handleCalculateRoute(), 200)
+    return () => window.clearTimeout(timer)
+    // handleCalculateRoute change à chaque rendu : on ne réagit qu'aux données du trajet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [origin, destination, waypoints, routeMode, route, routeLoading, routeError, navigationActive])
+
+  // Itinéraire trouvé : on fait défiler le panneau jusqu'au résumé (durée, arrivée, bouton Démarrer).
+  useEffect(() => {
+    if (!route || navigationActive) return
+    const frame = window.requestAnimationFrame(() => {
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      routeSummaryRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [route, navigationActive])
 
   if (settingsOpen) {
     return (
@@ -971,7 +993,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       <div className="route-divider" />
 
       {route ? (
-        <div className="route-summary" role="status" aria-live="polite">
+        <div className="route-summary" role="status" aria-live="polite" ref={routeSummaryRef}>
           <div className="route-summary-heading">
             <span className="route-summary-icon"><RouteIcon size={17} /></span>
             <span>
@@ -1077,15 +1099,17 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
 
       {!navigationActive && (
         <>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={!origin || !destination || routeLoading}
-            onClick={() => void handleCalculateRoute()}
-          >
-            {routeLoading ? <LoaderCircle size={16} className="route-button-spinner" /> : <Search size={16} />}
-            {routeLoading ? 'Calcul en cours…' : route ? 'Recalculer l’itinéraire' : 'Calculer l’itinéraire'}
-          </button>
+          {!route && (
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!origin || !destination || routeLoading}
+              onClick={() => void handleCalculateRoute()}
+            >
+              {routeLoading ? <LoaderCircle size={16} className="route-button-spinner" /> : <Search size={16} />}
+              {routeLoading ? 'Calcul en cours…' : routeError ? 'Réessayer' : 'Calculer l’itinéraire'}
+            </button>
+          )}
           <p className="panel-footnote">
             {route
               ? `Itinéraire ${getRouteModeLabel(routeMode).toLocaleLowerCase('fr-FR')} calculé via ${getRouteProviderLabel()}.`
