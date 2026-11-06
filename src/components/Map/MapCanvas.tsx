@@ -620,7 +620,8 @@ export function MapCanvas() {
             'line-opacity': 0.85,
           },
         },
-        firstSymbolLayer,
+        // Toujours sous le trajet (et son contour), sinon les lignes de trafic le recouvrent.
+        map.getLayer('osrm-route-casing') ? 'osrm-route-casing' : firstSymbolLayer,
       )
     }
 
@@ -712,6 +713,21 @@ export function MapCanvas() {
     // Toujours au-dessus de la bande bleue (qui peut être recréée après un changement de thème).
     if (map.getLayer('osrm-route-line')) map.moveLayer(ROUTE_TRAFFIC_LAYER_ID, firstSymbolLayer)
   }, [routeTrafficData, status, route])
+
+  // En conduite, le trafic des autres routes passe au second plan : sans le vert « fluide »
+  // (inutile en roulant) et plus transparent, pour que le trajet reste bien lisible.
+  // Le trajet lui-même garde ses portions orange et rouges (couche route-traffic-line).
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map || !trafficEnabled || !map.getLayer(TRAFFIC_LAYER_ID)) return
+    map.setFilter(
+      TRAFFIC_LAYER_ID,
+      drivingActive
+        ? ['any', ['has', 'road_closure'], ['<', ['to-number', ['get', 'traffic_level'], 1], 0.75]]
+        : null,
+    )
+    map.setPaintProperty(TRAFFIC_LAYER_ID, 'line-opacity', drivingActive ? 0.5 : 0.85)
+  }, [drivingActive, trafficEnabled, status])
 
   // Nouveau trajet : on repart de zéro.
   useEffect(() => {
