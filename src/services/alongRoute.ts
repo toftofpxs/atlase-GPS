@@ -1,5 +1,6 @@
 // Recherche de lieux sur l'itinéraire, devant la position (stations, recharge, parkings, aires).
-// Données OpenStreetMap via Overpass, comme les STOP.
+// D'abord TomTom « Along Route Search » (rapide, trié par temps de détour), via /api/along-route
+// pour garder la clé côté serveur. En secours : OpenStreetMap via Overpass, comme les STOP.
 import type { RouteSummary } from '../types/geocoding'
 import { fetchOverpass, simplifyLine, type OverpassElement } from './routeControls'
 import { getPointAtDistance, getRouteGeometry, getRouteProgress, type Point } from './routeGeometry'
@@ -16,6 +17,8 @@ export interface AlongRoutePlace {
   distanceAhead: number
   /** Écart entre le lieu et le trajet. */
   distanceFromRoute: number
+  /** Temps de détour pour y aller et revenir sur le trajet (TomTom), en secondes. */
+  detourSeconds?: number
 }
 
 export const ALONG_ROUTE_CATEGORIES: { value: AlongRouteCategory; label: string }[] = [
@@ -40,18 +43,50 @@ const SIMPLIFY_TOLERANCE_METERS = 40
 const MAX_POLYLINE_POINTS = 350
 const MAX_RESULTS = 10
 
+/** Catégories TomTom (API poiCategories) : station-service, borne de recharge, parkings, aire de repos. */
+const TOMTOM_CATEGORIES: Record<AlongRouteCategory, string> = {
+  fuel: '7311',
+  charging: '7309',
+  parking: '7369,7313',
+  rest: '7395',
+}
+/** Détour maximal accepté (aller-retour depuis le trajet). */
+const MAX_DETOUR_SECONDS = 600
+
+interface TomTomAlongRouteResponse {
+  results?: {
+    id?: string
+    position?: { lat: number; lon: number }
+    detourTime?: number
+    poi?: { name?: string; brands?: { name?: string }[] }
+    address?: { freeformAddress?: string; municipality?: string }
+  }[]
+}
+
 export async function searchAlongRoute(
   route: RouteSummary,
   fromAlong: number,
   category: AlongRouteCategory,
   signal: AbortSignal,
 ): Promise<AlongRoutePlace[]> {
+  const line = getLineAhead(route, fromAlong)
+  if (!line) return []
+  try {
+    return await searchWithTomTom(route, fromAlong, category, line, signal)
+  } catch (error) {
+    if (signal.aborted) throw error
+    // TomTom indisponible (quota, réseau…) : on tente OpenStreetMap.
+    return searchWithOverpass(route, fromAlong, category, line, signal)
+  }
+}
+
+/** Morceau du trajet devant la position, simplifié pour tenir dans une seule requête. */
+function getLineAhead(route: RouteSummary, fromAlong: number): Point[] | null {
   const coordinates = route.coordinates as Point[]
   const { cumulative, total } = getRouteGeometry(coordinates)
   const end = Math.min(total, fromAlong + SEARCH_AHEAD_METERS)
-  if (end - fromAlong < 50) return []
+  if (end - fromAlong < 50) return null
 
-  // Morceau du trajet devant la position, simplifié pour rester dans une seule requête.
   const ahead: Point[] = [getPointAtDistance(coordinates, fromAlong)]
   for (let index = 0; index < coordinates.length; index += 1) {
     if (cumulative[index] > fromAlong && cumulative[index] < end) ahead.push(coordinates[index])
@@ -62,7 +97,69 @@ export async function searchAlongRoute(
     const step = Math.ceil(line.length / MAX_POLYLINE_POINTS)
     line = line.filter((_, index) => index % step === 0 || index === line.length - 1)
   }
+  return line
+}
 
+async function searchWithTomTom(
+  route: RouteSummary,
+  fromAlong: number,
+  category: AlongRouteCategory,
+  line: Point[],
+  signal: AbortSignal,
+): Promise<AlongRoutePlace[]> {
+  const params = new URLSearchParams({
+    maxDetourTime: String(MAX_DETOUR_SECONDS),
+    limit: '20',
+    categorySet: TOMTOM_CATEGORIES[category],
+    language: 'fr-FR',
+  })
+  // Requête sans mot-clé : la catégorie suffit, et donne plus de résultats qu'un mot comme « station ».
+  const response = await fetch(`/api/along-route/.json?${params}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ route: { points: line.map(([lon, lat]) => ({ lat, lon })) } }),
+    signal,
+  })
+  if (!response.ok) throw new Error(`Recherche TomTom : ${response.status}`)
+  const data = (await response.json()) as TomTomAlongRouteResponse
+
+  const coordinates = route.coordinates as Point[]
+  const label = ALONG_ROUTE_CATEGORIES.find((entry) => entry.value === category)?.label ?? 'Lieu'
+  const places: AlongRoutePlace[] = []
+  for (const result of data.results ?? []) {
+    if (!result.position) continue
+    const point: Point = [result.position.lon, result.position.lat]
+    // Le champ « dist » de TomTom est la distance depuis le début du tracé envoyé : on recalcule.
+    const progress = getRouteProgress(coordinates, point, fromAlong)
+    const distanceAhead = progress.along - fromAlong
+    if (distanceAhead < 50) continue
+    const brand = result.poi?.brands?.[0]?.name
+    const name = result.poi?.name ?? brand ?? label
+    places.push({
+      id: `tomtom-${result.id ?? `${point[0]},${point[1]}`}`,
+      category,
+      name,
+      details: [result.address?.freeformAddress ?? result.address?.municipality, brand && brand !== name ? brand : null]
+        .filter(Boolean)
+        .join(' · ') || label,
+      coordinates: point,
+      distanceAhead,
+      distanceFromRoute: progress.distance,
+      detourSeconds: result.detourTime,
+    })
+  }
+  places.sort((first, second) => first.distanceAhead - second.distanceAhead)
+  return places.slice(0, MAX_RESULTS)
+}
+
+async function searchWithOverpass(
+  route: RouteSummary,
+  fromAlong: number,
+  category: AlongRouteCategory,
+  line: Point[],
+  signal: AbortSignal,
+): Promise<AlongRoutePlace[]> {
+  const coordinates = route.coordinates as Point[]
   const polyline = line.map(([lon, lat]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join(',')
   const query = [
     '[out:json][timeout:25];',

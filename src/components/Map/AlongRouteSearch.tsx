@@ -8,6 +8,16 @@ import {
   type AlongRouteCategory,
   type AlongRoutePlace,
 } from '../../services/alongRoute'
+import {
+  formatFuelPrice,
+  formatPriceAge,
+  FUEL_TYPES,
+  getFuelPrices,
+  loadFuelType,
+  saveFuelType,
+  type FuelType,
+  type StationPrices,
+} from '../../services/fuelPrices'
 import { haptic } from '../../services/haptics'
 import { getRouteProgress } from '../../services/routeGeometry'
 import { calculateRoute } from '../../services/routing'
@@ -44,6 +54,9 @@ export function AlongRouteSearch({ map, mapReady, along, onOpenChange }: AlongRo
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [addingId, setAddingId] = useState<string | null>(null)
   const [addError, setAddError] = useState('')
+  const [fuelType, setFuelType] = useState<FuelType>(loadFuelType)
+  const [prices, setPrices] = useState<Map<string, StationPrices | null>>(new Map())
+  const [pricesStatus, setPricesStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const markersRef = useRef<MapLibreMarker[]>([])
   const alongRef = useRef(along)
   alongRef.current = along
@@ -76,6 +89,32 @@ export function AlongRouteSearch({ map, mapReady, along, onOpenChange }: AlongRo
       })
     return () => controller.abort()
   }, [category, open, route])
+
+  // Prix officiels des carburants pour les stations trouvées (une seule requête).
+  useEffect(() => {
+    setPrices(new Map())
+    if (category !== 'fuel' || places.length === 0) {
+      setPricesStatus('idle')
+      return
+    }
+    const controller = new AbortController()
+    setPricesStatus('loading')
+    void getFuelPrices(places.map((place) => place.coordinates), controller.signal)
+      .then((results) => {
+        if (controller.signal.aborted) return
+        setPrices(new Map(places.map((place, index) => [place.id, results[index]])))
+        setPricesStatus('ready')
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setPricesStatus('error')
+      })
+    return () => controller.abort()
+  }, [category, places])
+
+  const cheapestPrice =
+    category === 'fuel'
+      ? Math.min(...places.map((place) => prices.get(place.id)?.[fuelType].price ?? Infinity))
+      : Infinity
 
   // Repères des résultats sur la carte, tant que le panneau est ouvert.
   useEffect(() => {
@@ -207,6 +246,26 @@ export function AlongRouteSearch({ map, mapReady, along, onOpenChange }: AlongRo
           )}
           {addError && <p className="along-route-message is-error" role="alert">{addError}</p>}
 
+          {category === 'fuel' && places.length > 0 && (
+            <div className="along-route-fuels" role="group" aria-label="Carburant">
+              {FUEL_TYPES.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={fuelType === value ? 'is-selected' : ''}
+                  aria-pressed={fuelType === value}
+                  onClick={() => {
+                    haptic('tap')
+                    setFuelType(value)
+                    saveFuelType(value)
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {places.length > 0 && (
             <ol className="along-route-results">
               {places.map((place, index) => (
@@ -216,8 +275,22 @@ export function AlongRouteSearch({ map, mapReady, along, onOpenChange }: AlongRo
                     <strong>{place.name}</strong>
                     <span>
                       dans {formatDistance(place.distanceAhead)}
-                      {place.distanceFromRoute > 150 ? ` · à ${formatDistance(place.distanceFromRoute)} de la route` : ''}
+                      {place.detourSeconds !== undefined
+                        ? place.detourSeconds < 60
+                          ? ' · sans détour'
+                          : ` · détour +${Math.round(place.detourSeconds / 60)} min`
+                        : place.distanceFromRoute > 150
+                          ? ` · à ${formatDistance(place.distanceFromRoute)} de la route`
+                          : ''}
                     </span>
+                    {category === 'fuel' && (
+                      <FuelPriceLine
+                        prices={prices.get(place.id)}
+                        status={pricesStatus}
+                        fuelType={fuelType}
+                        cheapestPrice={cheapestPrice}
+                      />
+                    )}
                   </span>
                   <button
                     type="button"
@@ -232,12 +305,44 @@ export function AlongRouteSearch({ map, mapReady, along, onOpenChange }: AlongRo
               ))}
             </ol>
           )}
-          <small className="along-route-source">Données OpenStreetMap, non exhaustives</small>
+          <small className="along-route-source">
+            Données TomTom (OpenStreetMap en secours), non exhaustives
+            {category === 'fuel' ? ' · Prix : prix-carburants.gouv.fr' : ''}
+          </small>
         </section>,
         // Hors de la carte : la colonne d'outils est transformée (translateY), ce qui casserait le positionnement fixe.
         document.body,
       )}
     </>
+  )
+}
+
+/** Prix du carburant choisi pour une station, avec la mention « le moins cher ». */
+function FuelPriceLine({
+  prices,
+  status,
+  fuelType,
+  cheapestPrice,
+}: {
+  prices: StationPrices | null | undefined
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  fuelType: FuelType
+  cheapestPrice: number
+}) {
+  if (status === 'loading') return <span className="along-route-price is-muted">Prix…</span>
+  if (status === 'error') return <span className="along-route-price is-muted">Prix indisponibles</span>
+  if (!prices) return <span className="along-route-price is-muted">Prix non communiqué</span>
+  const { price, updatedAt } = prices[fuelType]
+  const label = FUEL_TYPES.find((fuel) => fuel.value === fuelType)?.label ?? ''
+  if (price === null) return <span className="along-route-price is-muted">Pas de {label} ici</span>
+  const cheapest = price === cheapestPrice
+  const age = formatPriceAge(updatedAt)
+  return (
+    <span className={`along-route-price ${cheapest ? 'is-cheapest' : ''}`}>
+      <b>{formatFuelPrice(price)}</b>/L {label}
+      {cheapest && <em>Le moins cher</em>}
+      {age && <small>{age}</small>}
+    </span>
   )
 }
 

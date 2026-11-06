@@ -711,3 +711,15 @@ div.nav-sheet-summary { cursor: default; }
 .nav-sheet-summary strong.is-traffic-slow { color: #e37400; }
 .nav-sheet-summary strong.is-traffic-heavy { color: #d93025; }
 .nav-sheet-summary .nav-traffic-delay { margin-left: 8px; font-size: 15px; font-weight: 700; vertical-align: 0.35em; }
+
+/* Prix des carburants dans « Sur le trajet ». */
+.along-route-fuels { display: flex; flex: 0 0 auto; gap: 6px; margin: 0 -2px; padding: 2px; overflow-x: auto; scrollbar-width: none; }
+.along-route-fuels::-webkit-scrollbar { display: none; }
+.along-route-fuels button { flex: 0 0 auto; min-height: 36px; padding: 0 12px; color: var(--color-text); background: var(--color-canvas); border: 1px solid transparent; border-radius: var(--radius-pill); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.along-route-fuels button.is-selected { color: var(--color-accent); background: var(--color-accent-soft); border-color: var(--color-accent); }
+.along-route-copy .along-route-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--color-text); font-size: 13px; }
+.along-route-copy .along-route-price b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.along-route-copy .along-route-price.is-cheapest b { color: #1e8e3e; }
+.along-route-copy .along-route-price em { padding: 1px 6px; color: #fff; background: #1e8e3e; border-radius: var(--radius-pill); font-size: 11px; font-style: normal; font-weight: 700; }
+.along-route-copy .along-route-price small { color: var(--color-subtle); font-size: 11px; }
+.along-route-copy .along-route-price.is-muted { color: var(--color-subtle); }

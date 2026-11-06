@@ -38,6 +38,15 @@ export default defineConfig(({ mode }) => {
       proxy: {
         // En dev, les tuiles /api/traffic/flow/{z}/{x}/{y}.pbf sont relayées vers TomTom avec la clé ajoutée ici.
         // En prod, c'est la fonction Netlify netlify/functions/traffic.mts qui fait la même chose.
+        // Recherche le long du trajet (TomTom) : en prod, netlify/functions/along-route.mts.
+        '/api/along-route': {
+          target: 'https://api.tomtom.com',
+          changeOrigin: true,
+          rewrite: (path) =>
+            path.replace(/^\/api\/along-route\/([^/?]*)\.json(\?.*)?$/, (_match, query: string, search = '') =>
+              `/search/2/searchAlongRoute/${query}.json${search ? `${search}&` : '?'}key=${apiKey}`,
+            ),
+        },
         '/api/traffic': {
           target: 'https://api.tomtom.com',
           changeOrigin: true,
