@@ -60,6 +60,9 @@ export function getDistanceMeters(
 /**
  * Position actuelle. `maximumAgeMs` : âge maximal d'une position déjà connue du téléphone
  * (par défaut 1 minute ; mettre une valeur courte quand on s'est sûrement déplacé).
+ *
+ * On demande d'abord le GPS précis ; s'il tarde (entre des immeubles, en intérieur), on se
+ * rabat sur la position réseau (Wi-Fi, antennes), moins précise mais quasi immédiate.
  */
 export function getCurrentLocation(maximumAgeMs = 60_000): Promise<Destination> {
   if (!window.isSecureContext) {
@@ -69,21 +72,27 @@ export function getCurrentLocation(maximumAgeMs = 60_000): Promise<Destination> 
     return Promise.reject(new Error('unsupported'))
   }
 
-  return new Promise((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        resolve({
-          id: 'browser-current-location',
-          name: 'Ma position',
-          details: 'Position GPS actuelle',
-          coordinates: [coords.longitude, coords.latitude],
-        })
-      },
-      (error) => {
-        reject(new Error(error.code === error.PERMISSION_DENIED ? 'permission-denied' : 'unavailable'))
-      },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: maximumAgeMs },
-    )
+  const request = (options: PositionOptions) =>
+    new Promise<Destination>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+          resolve({
+            id: 'browser-current-location',
+            name: 'Ma position',
+            details: 'Position GPS actuelle',
+            coordinates: [coords.longitude, coords.latitude],
+          })
+        },
+        (error) => {
+          reject(new Error(error.code === error.PERMISSION_DENIED ? 'permission-denied' : 'unavailable'))
+        },
+        options,
+      )
+    })
+
+  return request({ enableHighAccuracy: true, timeout: 7000, maximumAge: maximumAgeMs }).catch((error: unknown) => {
+    if (error instanceof Error && error.message === 'permission-denied') throw error
+    return request({ enableHighAccuracy: false, timeout: 10_000, maximumAge: Math.max(maximumAgeMs, 30_000) })
   })
 }
 

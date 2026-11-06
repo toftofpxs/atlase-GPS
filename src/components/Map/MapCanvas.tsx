@@ -327,12 +327,25 @@ export function MapCanvas() {
         map = instance
         mapRef.current = instance
 
-        const handleLoad = () => setStatus('ready')
-        const handleStyleLoad = () => setStatus('ready')
+        // Une fois la carte affichée, plus aucune erreur ne doit la remplacer par l'écran d'échec
+        // (une erreur ponctuelle de rendu est journalisée, la carte continue de tourner).
+        let loadedOnce = false
+        const handleLoad = () => {
+          loadedOnce = true
+          setStatus('ready')
+        }
+        const handleStyleLoad = () => {
+          loadedOnce = true
+          setStatus('ready')
+        }
         const handleError = (event: ErrorEvent & { sourceId?: string; tile?: unknown }) => {
           // Une tuile qui échoue (tunnel, réseau faible) ne doit pas masquer toute la carte :
           // seules les erreurs du style lui-même sont bloquantes. Les tuiles manquantes se rechargent seules.
           if (event.sourceId || event.tile) return
+          if (loadedOnce) {
+            console.warn('Erreur de la carte', event.error)
+            return
+          }
           if (!instance.isStyleLoaded()) {
             setErrorMessage(event.error.message)
             setStatus('error')
@@ -876,7 +889,7 @@ export function MapCanvas() {
 
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick)
-      const dt = Math.min(now - lastFrame, 100)
+      const dt = Math.max(0, Math.min(now - lastFrame, 100))
       lastFrame = now
 
       const motion = motionRef.current
@@ -922,12 +935,25 @@ export function MapCanvas() {
 
       const k = 1 - Math.exp(-dt / CAMERA_SMOOTHING_MS)
       const zoomK = 1 - Math.exp(-dt / CAMERA_ZOOM_SMOOTHING_MS)
-      map.jumpTo({
-        center,
-        bearing,
+      // Garde-fou : une seule valeur invalide (NaN) transmise à MapLibre casse tout le rendu.
+      // Ça peut arriver au retour d'arrière-plan (écran verrouillé) ou sans position exploitable.
+      const next = {
         zoom: lerp(zoom, zoomTarget, zoomK),
         pitch: lerp(pitch, follow.pitch, k),
-        padding: { top: lerp(paddingTop, follow.paddingTop, k), bottom: 0, left: 0, right: 0 },
+        paddingTop: lerp(paddingTop, follow.paddingTop, k),
+      }
+      if (!Number.isFinite(center[0]) || !Number.isFinite(center[1])) return
+      map.jumpTo({
+        center,
+        bearing: Number.isFinite(bearing) ? bearing : map.getBearing(),
+        zoom: Number.isFinite(next.zoom) ? next.zoom : Number.isFinite(zoomTarget) ? zoomTarget : zoom,
+        pitch: Number.isFinite(next.pitch) ? next.pitch : follow.pitch,
+        padding: {
+          top: Number.isFinite(next.paddingTop) ? next.paddingTop : Number.isFinite(follow.paddingTop) ? follow.paddingTop : 0,
+          bottom: 0,
+          left: 0,
+          right: 0,
+        },
       })
     }
 
