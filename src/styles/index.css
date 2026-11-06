@@ -868,3 +868,33 @@ div.nav-sheet-summary { cursor: default; }
 .nav-details-wrap .nav-details { box-sizing: border-box; height: calc(100% - 14px); max-height: none; margin-top: 14px; animation: nav-details-fade 260ms ease both; }
 @keyframes nav-details-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .nav-details-wrap .nav-details { animation: none; } }
+
+/* ===== Trafic dans le choix d'itinéraire ===== */
+.route-metrics strong.is-traffic-slow, .route-choice .route-choice-duration.is-traffic-slow { color: #e37400; }
+.route-metrics strong.is-traffic-heavy, .route-choice .route-choice-duration.is-traffic-heavy { color: #d93025; }
+:root[data-theme='dark'] .route-metrics strong.is-traffic-slow, :root[data-theme='dark'] .route-choice .route-choice-duration.is-traffic-slow { color: #ffb74d; }
+:root[data-theme='dark'] .route-metrics strong.is-traffic-heavy, :root[data-theme='dark'] .route-choice .route-choice-duration.is-traffic-heavy { color: #ff8a80; }
+.route-traffic-note { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+.route-choice-fastest { margin-left: 8px; padding: 2px 7px; color: #fff; background: #1e8e3e; border-radius: var(--radius-pill); font-size: 11px; font-style: normal; font-weight: 700; vertical-align: 1px; white-space: nowrap; }
+
+/* ===== Trajets récents ===== */
+.recent-trips { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.recent-trip-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.recent-trip { display: flex; align-items: stretch; gap: 4px; background: var(--color-surface-raised); border: 1px solid var(--color-line); border-radius: 14px; animation: list-item-in 240ms cubic-bezier(.2, .8, .2, 1) both; }
+.recent-trip:nth-child(2) { animation-delay: 40ms; }
+.recent-trip:nth-child(3) { animation-delay: 80ms; }
+.recent-trip:nth-child(n + 4) { animation-delay: 120ms; }
+.recent-trip-main { display: flex; min-width: 0; min-height: 64px; flex: 1; align-items: center; gap: 12px; padding: 10px 4px 10px 12px; color: var(--color-text); text-align: left; background: transparent; border: 0; border-radius: 14px; font: inherit; cursor: pointer; }
+.recent-trip-main:disabled { cursor: wait; }
+.recent-trip-icon { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; color: var(--color-accent); background: var(--color-accent-soft); border-radius: 12px; }
+.recent-trip-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.recent-trip-copy strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.recent-trip-copy span { overflow: hidden; color: var(--color-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.recent-trip-copy small { color: var(--color-subtle); font-size: 12px; }
+.recent-trip-remove { display: grid; width: 44px; flex: 0 0 auto; place-items: center; color: var(--color-muted); background: transparent; border: 0; border-radius: 0 14px 14px 0; cursor: pointer; }
+.recent-trips-clear { align-self: center; min-height: 40px; padding: 0 14px; color: var(--color-muted); background: transparent; border: 0; border-radius: var(--radius-pill); font: inherit; font-size: 13px; cursor: pointer; }
+.recent-trips-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; color: var(--color-text); font-size: 13px; }
+.recent-trips-confirm button { min-height: 40px; padding: 0 14px; color: var(--color-text); background: var(--color-canvas); border: 0; border-radius: var(--radius-pill); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.recent-trips-confirm .is-danger { color: #fff; background: var(--color-danger); }
+:root[data-theme='dark'] .recent-trips-confirm .is-danger { color: #2a0a07; }
+@media (prefers-reduced-motion: reduce) { .recent-trip { animation: none; } }

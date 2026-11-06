@@ -180,6 +180,7 @@ export function MapCanvas() {
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
   const destination = useInterfaceStore((state) => state.destination)
+  const routeMode = useInterfaceStore((state) => state.routeMode)
   const route = useInterfaceStore((state) => state.route)
   const routeOptions = useInterfaceStore((state) => state.routeOptions)
   const selectedRouteIndex = useInterfaceStore((state) => state.selectedRouteIndex)
@@ -239,8 +240,9 @@ export function MapCanvas() {
   const previousProgress = routeProgressRef.current.route === route ? routeProgressRef.current.along : 0
   const routeProgress = guidance && guidance.distanceFromRoute <= 100 ? guidance.along : previousProgress
   routeProgressRef.current = { route, along: routeProgress }
-  // Retard dû aux bouchons sur le reste du trajet (0 si le trafic est désactivé).
-  const trafficDelay = trafficEnabled ? getRemainingTrafficDelay(routeTraffic, routeProgress) : 0
+  // Retard dû aux bouchons sur le reste du trajet, toujours compté en voiture (le bouton Trafic
+  // ne sert qu'à afficher les couleurs) : même temps que dans le choix d'itinéraire.
+  const trafficDelay = routeMode === 'driving' ? getRemainingTrafficDelay(routeTraffic, routeProgress) : 0
   const remaining = baseRemaining && { ...baseRemaining, duration: baseRemaining.duration + trafficDelay }
   const trafficDelayLevel =
     trafficDelay >= TRAFFIC_DELAY_HEAVY_SECONDS ? 'heavy' : trafficDelay >= TRAFFIC_DELAY_SLOW_SECONDS ? 'slow' : null
@@ -660,7 +662,7 @@ export function MapCanvas() {
 
   // Trafic sur le trajet : tuiles TomTom le long des 100 km à venir, rafraîchies toutes les 5 minutes.
   useEffect(() => {
-    if (!trafficEnabled || !route) {
+    if (routeMode !== 'driving' || !route) {
       setRouteTraffic(null)
       return
     }
@@ -677,7 +679,7 @@ export function MapCanvas() {
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [trafficEnabled, route, routeTrafficFrom, routeTrafficTick])
+  }, [routeMode, route, routeTrafficFrom, routeTrafficTick])
 
   useEffect(() => {
     const map = mapRef.current
@@ -1827,6 +1829,7 @@ export function MapCanvas() {
                 currentDuration={remaining.duration}
                 currentDistance={remaining.distance}
                 trafficEnabled={trafficEnabled}
+                compareTraffic={routeMode === 'driving'}
                 onToggleTraffic={() => {
                   haptic('tap')
                   setTrafficEnabled((enabled) => !enabled)

@@ -19,6 +19,33 @@ export interface ParkedCar {
   /** Adresse approximative (géocodage inverse), si disponible. */
   address: string | null
 }
+/** Trajet récent (enregistré au démarrage d'une navigation). */
+export interface RecentTrip {
+  id: string
+  /** Départ ; null = « Ma position » (relocalisé au moment de relancer le trajet). */
+  origin: Destination | null
+  destination: Destination
+  waypoints: Destination[]
+  routeMode: RouteMode
+  tollPreference: TollPreference
+  /** Dernier démarrage (ms depuis 1970). */
+  startedAt: number
+  /** Nombre de fois où ce trajet a été lancé. */
+  count: number
+}
+
+/** Nombre maximal de trajets récents gardés. */
+const MAX_RECENT_TRIPS = 12
+/** Identifiants des départs « position GPS » : ils ne sont pas mémorisés tels quels. */
+const CURRENT_POSITION_IDS = new Set(['browser-current-location', 'reroute-origin', 'current-position'])
+
+/** Clé d'un trajet : même départ, même destination, même mode = même trajet récent. */
+function getRecentTripKey(origin: Destination | null, destination: Destination, routeMode: RouteMode): string {
+  const place = (value: Destination | null) =>
+    value ? `${value.coordinates[0].toFixed(4)},${value.coordinates[1].toFixed(4)}` : 'ma-position'
+  return `${place(origin)}>${place(destination)}>${routeMode}`
+}
+
 export type FavoritePlace = Destination & { shortcut?: FavoriteShortcut }
 
 interface InterfaceState {
@@ -52,6 +79,7 @@ interface InterfaceState {
   /** Conduite sans itinéraire : vitesse et limitation affichées, carte qui suit. */
   freeDriveActive: boolean
   parkedCar: ParkedCar | null
+  recentTrips: RecentTrip[]
   currentPosition: CurrentPosition | null
   /** Position sur le trajet, calculée une seule fois par position GPS. */
   navigationGuidance: NavigationGuidance | null
@@ -91,6 +119,10 @@ interface InterfaceState {
   startFreeDrive: () => void
   stopFreeDrive: () => void
   setParkedCar: (parkedCar: ParkedCar | null) => void
+  removeRecentTrip: (id: string) => void
+  clearRecentTrips: () => void
+  /** Reprend un trajet récent (le calcul d'itinéraire se lance ensuite tout seul). */
+  restoreRecentTrip: (trip: RecentTrip, origin: Destination | null) => void
   setCurrentPosition: (position: CurrentPosition | null) => void
   updateNavigationPosition: (position: CurrentPosition, guidance: NavigationGuidance) => void
   setNavigationRerouting: (rerouting: boolean) => void
@@ -144,6 +176,7 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
   navigationActive: false,
   freeDriveActive: false,
   parkedCar: null,
+  recentTrips: [],
   currentPosition: null, navigationGuidance: null,
   navigationStepIndex: 0, navigationRerouting: false,
   navigationError: null,
@@ -301,7 +334,10 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
         : state,
     ),
   startNavigation: () => {
-    set({ navigationActive: true, freeDriveActive: false, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null })
+    set((state) => ({
+      navigationActive: true, freeDriveActive: false, currentPosition: null, navigationGuidance: null, navigationStepIndex: 0, navigationRerouting: false, navigationError: null,
+      recentTrips: state.destination ? addRecentTrip(state) : state.recentTrips,
+    }))
     persistTrip(get())
   },
   stopNavigation: () => {
@@ -348,6 +384,25 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
     set({ freeDriveActive: true, navigationActive: false, currentPosition: null, navigationGuidance: null, navigationError: null }),
   stopFreeDrive: () => set({ freeDriveActive: false, currentPosition: null }),
   setParkedCar: (parkedCar) => set({ parkedCar }),
+  removeRecentTrip: (id) => set((state) => ({ recentTrips: state.recentTrips.filter((trip) => trip.id !== id) })),
+  clearRecentTrips: () => set({ recentTrips: [] }),
+  restoreRecentTrip: (trip, origin) =>
+    set((state) => ({
+      origin,
+      destination: trip.destination,
+      waypoints: trip.waypoints,
+      routeMode: trip.routeMode,
+      tollPreference: trip.tollPreference,
+      route: null,
+      routeOptions: [],
+      selectedRouteIndex: 0,
+      routeLoading: false,
+      routeError: null,
+      routeRequestId: state.routeRequestId + 1,
+      activeSection: 'route',
+      settingsOpen: false,
+      mobileNavOpen: false,
+    })),
   setCurrentPosition: (currentPosition) => set({ currentPosition }),
   setNavigationRerouting: (navigationRerouting) => set({ navigationRerouting }),
   applyReroute: (route) => {
@@ -391,9 +446,30 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
   partialize: (state) => ({
     favorites: state.favorites,
     parkedCar: state.parkedCar,
+    recentTrips: state.recentTrips,
     movementIcon: state.movementIcon,
     hapticsEnabled: state.hapticsEnabled,
     offlineMapEnabled: state.offlineMapEnabled,
     themeMode: state.themeMode,
   }),
 }))
+
+/** Liste des trajets récents après le démarrage du trajet en cours (sans doublon, le plus récent en tête). */
+function addRecentTrip(state: InterfaceState): RecentTrip[] {
+  const destination = state.destination
+  if (!destination) return state.recentTrips
+  const origin = state.origin && !CURRENT_POSITION_IDS.has(state.origin.id) ? state.origin : null
+  const id = getRecentTripKey(origin, destination, state.routeMode)
+  const previous = state.recentTrips.find((trip) => trip.id === id)
+  const trip: RecentTrip = {
+    id,
+    origin,
+    destination,
+    waypoints: state.waypoints,
+    routeMode: state.routeMode,
+    tollPreference: state.tollPreference,
+    startedAt: Date.now(),
+    count: (previous?.count ?? 0) + 1,
+  }
+  return [trip, ...state.recentTrips.filter((entry) => entry.id !== id)].slice(0, MAX_RECENT_TRIPS)
+}

@@ -79,18 +79,15 @@ import {
   getRoutingErrorMessage,
 } from '../../services/routing'
 import { useInterfaceStore } from '../../stores/interfaceStore'
+import { RecentTrips } from './RecentTrips'
+import { useRoutesTrafficDelay } from '../../hooks/useRoutesTrafficDelay'
 import type { FavoriteShortcut, MovementIcon, ThemeMode } from '../../stores/interfaceStore'
-import type { RouteMode, TollPreference } from '../../types/geocoding'
+import type { RouteMode, RouteSummary, TollPreference } from '../../types/geocoding'
 import type { SidebarSection } from '../../types/navigation'
 
 interface RoutePanelProps {
   section: SidebarSection
   settingsOpen: boolean
-}
-
-const recentSectionContent = {
-  title: 'Aucun trajet récent',
-  description: 'Vos dernières destinations seront regroupées ici.',
 }
 
 export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
@@ -155,6 +152,8 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const setRouteMode = useInterfaceStore((state) => state.setRouteMode)
   const setTollPreference = useInterfaceStore((state) => state.setTollPreference)
   const selectRouteOption = useInterfaceStore((state) => state.selectRouteOption)
+  // Bouchons sur chaque itinéraire proposé (en voiture, avant de partir).
+  const routesTraffic = useRoutesTrafficDelay(routeOptions, routeMode === 'driving' && !navigationActive)
   const selectSection = useInterfaceStore((state) => state.selectSection)
   useEffect(() => {
     setFavoriteDraftShortcut('')
@@ -436,6 +435,17 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     if (hasRoute) void handleCalculateRoute(preference)
   }
 
+  // Trafic actuel : pris en compte seulement pour un départ dans moins de 30 minutes.
+  const scheduledDeparture = getScheduledDepartureDate(departureDate, departureTime)
+  const departureSoon = !scheduledDeparture || scheduledDeparture.getTime() - Date.now() < 30 * 60_000
+  const getTrafficDelay = (option: RouteSummary) => (departureSoon ? routesTraffic.delays.get(option) : undefined)
+  const getDurationWithTraffic = (option: RouteSummary) => option.duration + (getTrafficDelay(option) ?? 0)
+  const allDelaysKnown = departureSoon && routeOptions.length > 0 && routeOptions.every((option) => routesTraffic.delays.has(option))
+  const fastestRouteIndex = allDelaysKnown
+    ? routeOptions.reduce((best, option, index) => (getDurationWithTraffic(option) < getDurationWithTraffic(routeOptions[best]) ? index : best), 0)
+    : -1
+  const selectedTrafficDelay = route ? getTrafficDelay(route) : undefined
+
   // Calcul automatique dès que départ et destination sont connus, comme sur Google Maps ou Waze.
   // Le store efface l'itinéraire (et l'erreur) à chaque changement de départ, destination, étape ou mode :
   // cet effet se relance alors tout seul. Après une erreur, on attend un nouveau choix ou le bouton.
@@ -703,12 +713,8 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   if (section === 'recent') {
     return (
       <section className="side-panel" aria-labelledby="panel-title">
-        <PanelHeading eyebrow="Votre activité" title={recentSectionContent.title} />
-        <div className="empty-state">
-          <div className="empty-icon"><Search size={20} /></div>
-          <p>{recentSectionContent.description}</p>
-          <span className="empty-caption">Aucune donnée pour le moment</span>
-        </div>
+        <PanelHeading eyebrow="Votre activité" title="Trajets récents" />
+        <RecentTrips />
       </section>
     )
   }
@@ -1007,13 +1013,21 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
               <strong>{formatDistance(route.distance)}</strong>
             </div>
             <div>
-              <span>Durée estimée</span>
-              <strong>{formatDuration(route.duration)}</strong>
+              <span>{selectedTrafficDelay !== undefined ? 'Durée avec trafic' : 'Durée estimée'}</span>
+              <strong className={getTrafficDelayClass(selectedTrafficDelay)}>
+                {formatDuration(getDurationWithTraffic(route))}
+              </strong>
+              {selectedTrafficDelay !== undefined && selectedTrafficDelay >= 120 && (
+                <small className="route-traffic-note">dont {Math.round(selectedTrafficDelay / 60)} min de bouchons</small>
+              )}
+              {selectedTrafficDelay === undefined && routesTraffic.loading && departureSoon && (
+                <small className="route-traffic-note">Calcul du trafic…</small>
+              )}
             </div>
           </div>
           <div className="route-arrival">
             <span>Arrivée approximative</span>
-            <strong>{formatScheduledArrival(departureDate, departureTime, route.duration)}</strong>
+            <strong>{formatScheduledArrival(departureDate, departureTime, getDurationWithTraffic(route))}</strong>
           </div>
           {routeOptions.length > 1 && (
             <div className="route-choices" role="group" aria-label="Choisir un itinéraire">
@@ -1025,16 +1039,26 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
                   className={`route-choice ${selectedRouteIndex === index ? 'route-choice-selected' : ''}`}
                   onClick={() => selectRouteOption(index)}
                   aria-pressed={selectedRouteIndex === index}
-                  aria-label={`${index === 0 ? 'Itinéraire principal' : `Itinéraire alternatif ${index}`}, ${formatDuration(option.duration)}, ${formatDistance(option.distance)}`}
+                  aria-label={`${index === 0 ? 'Itinéraire principal' : `Itinéraire alternatif ${index}`}, ${formatDuration(getDurationWithTraffic(option))}, ${formatDistance(option.distance)}${index === fastestRouteIndex && routeOptions.length > 1 ? ', le plus rapide' : ''}`}
                 >
                   <span className={`route-choice-marker ${selectedRouteIndex === index ? 'route-choice-marker-selected' : ''}`}>
                     {index + 1}
                   </span>
                   <span className="route-choice-copy">
-                    <strong>{index === 0 ? 'Itinéraire principal' : `Alternative ${index}`}</strong>
-                    <small>{formatDistance(option.distance)}</small>
+                    <strong>
+                      {index === 0 ? 'Itinéraire principal' : `Alternative ${index}`}
+                      {index === fastestRouteIndex && routeOptions.length > 1 && (
+                        <em className="route-choice-fastest">Le plus rapide</em>
+                      )}
+                    </strong>
+                    <small>
+                      {formatDistance(option.distance)}
+                      {(getTrafficDelay(option) ?? 0) >= 120 ? ` · ${Math.round((getTrafficDelay(option) ?? 0) / 60)} min de bouchons` : ''}
+                    </small>
                   </span>
-                  <strong className="route-choice-duration">{formatDuration(option.duration)}</strong>
+                  <strong className={`route-choice-duration ${getTrafficDelayClass(getTrafficDelay(option)) ?? ''}`}>
+                    {formatDuration(getDurationWithTraffic(option))}
+                  </strong>
                 </button>
               ))}
             </div>
@@ -1238,4 +1262,9 @@ function PanelHeading({ eyebrow, title }: { eyebrow: string; title: string }) {
       <h1 id="panel-title">{title}</h1>
     </div>
   )
+}
+
+function getTrafficDelayClass(delay: number | undefined): string | undefined {
+  if (delay === undefined) return undefined
+  return delay >= 600 ? 'is-traffic-heavy' : delay >= 120 ? 'is-traffic-slow' : undefined
 }

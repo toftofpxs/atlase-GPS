@@ -18,6 +18,8 @@ interface NavigationSheetDetailsProps {
   currentDuration: number
   currentDistance: number
   trafficEnabled: boolean
+  /** Comparer les trajets bouchons compris (en voiture). */
+  compareTraffic: boolean
   onToggleTraffic: () => void
   onShare: () => void
   onOverview: () => void
@@ -48,6 +50,7 @@ export function NavigationSheetDetails({
   currentDuration,
   currentDistance,
   trafficEnabled,
+  compareTraffic,
   onToggleTraffic,
   onShare,
   onOverview,
@@ -81,7 +84,7 @@ export function NavigationSheetDetails({
         const withTraffic = await Promise.all(
           routes.map(async (option) => {
             let trafficDelay = 0
-            if (trafficEnabled) {
+            if (compareTraffic) {
               try {
                 trafficDelay = getRemainingTrafficDelay(await getRouteTraffic(option, 0, controller.signal), 0)
               } catch {
@@ -107,7 +110,7 @@ export function NavigationSheetDetails({
     // On ne recalcule pas à chaque mètre parcouru : seulement à l'ouverture, sur « Actualiser »
     // ou si le trajet change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route, refreshKey, trafficEnabled])
+  }, [route, refreshKey, compareTraffic])
 
   const chooseRoute = useCallback(
     (choice: RouteChoice) => {
