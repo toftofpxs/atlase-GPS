@@ -26,6 +26,10 @@ import {
   Moon,
   Navigation2,
   Plus,
+  Minus,
+  CalendarClock,
+  CalendarDays,
+  Clock3,
   Route as RouteIcon,
   Search,
   School,
@@ -102,8 +106,29 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
   const [locationError, setLocationError] = useState('')
   const [locationDialogOpen, setLocationDialogOpen] = useState(false)
   const [locationDialogClosing, setLocationDialogClosing] = useState(false)
-  const [departureDate, setDepartureDate] = useState(getCurrentDateValue)
-  const [departureTime, setDepartureTime] = useState(getCurrentTimeValue)
+  // « Maintenant » suit l'heure réelle ; « Programmer » fige un jour et une heure choisis.
+  const [departureMode, setDepartureMode] = useState<'now' | 'later'>('now')
+  const [plannedDate, setPlannedDate] = useState(getCurrentDateValue)
+  const [plannedTime, setPlannedTime] = useState(getCurrentTimeValue)
+  const departureDate = departureMode === 'now' ? getCurrentDateValue() : plannedDate
+  const departureTime = departureMode === 'now' ? getCurrentTimeValue() : plannedTime
+  const setPlannedDeparture = (date: Date) => {
+    const now = new Date()
+    const value = date.getTime() < now.getTime() ? now : date
+    setPlannedDate(toDateValue(value))
+    setPlannedTime(toTimeValue(value))
+  }
+  const shiftPlannedDeparture = (minutes: number) => {
+    haptic('tap')
+    const base = getScheduledDepartureDate(plannedDate, plannedTime) ?? new Date()
+    setPlannedDeparture(new Date(base.getTime() + minutes * 60_000))
+  }
+  const choosePlannedDay = (dayOffset: number) => {
+    haptic('tap')
+    const today = new Date()
+    const [hours, minutes] = plannedTime.split(':').map(Number)
+    setPlannedDeparture(new Date(today.getFullYear(), today.getMonth(), today.getDate() + dayOffset, hours || 0, minutes || 0))
+  }
   const [favoriteDraftShortcut, setFavoriteDraftShortcut] = useState<FavoriteShortcut | ''>('')
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
@@ -888,29 +913,97 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       )}
 
       <div className="departure-schedule">
-        <span className="departure-schedule-label">Départ prévu</span>
-        <div className="departure-schedule-fields">
-          <label>
-            <span className="sr-only">Jour de départ</span>
-            <input
-              type="date"
-              value={departureDate}
-              min={getCurrentDateValue()}
-              onChange={(event) => setDepartureDate(event.target.value)}
-              aria-label="Jour prévu de départ"
-            />
-          </label>
-          <label>
-            <span className="sr-only">Heure de départ</span>
-            <input
-              id="departure-time"
-              type="time"
-              value={departureTime}
-              onChange={(event) => setDepartureTime(event.target.value)}
-              aria-label="Heure prévue de départ"
-            />
-          </label>
+        <div className="departure-mode" role="radiogroup" aria-label="Heure de départ">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={departureMode === 'now'}
+            className={departureMode === 'now' ? 'is-active' : undefined}
+            onClick={() => {
+              haptic('tap')
+              setDepartureMode('now')
+            }}
+          >
+            <Clock3 size={16} />
+            Partir maintenant
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={departureMode === 'later'}
+            className={departureMode === 'later' ? 'is-active' : undefined}
+            onClick={() => {
+              haptic('tap')
+              if (departureMode !== 'later') {
+                // Proposition par défaut : dans 30 minutes, arrondi au quart d'heure.
+                const proposal = new Date(Date.now() + 30 * 60_000)
+                proposal.setMinutes(Math.ceil(proposal.getMinutes() / 15) * 15, 0, 0)
+                setPlannedDeparture(proposal)
+              }
+              setDepartureMode('later')
+            }}
+          >
+            <CalendarClock size={16} />
+            Programmer
+          </button>
         </div>
+
+        {departureMode === 'later' && (
+          <div className="departure-later">
+            <div className="departure-days" role="group" aria-label="Jour de départ">
+              {[0, 1].map((offset) => (
+                <button
+                  key={offset}
+                  type="button"
+                  className={plannedDate === getDateValueIn(offset) ? 'is-active' : undefined}
+                  aria-pressed={plannedDate === getDateValueIn(offset)}
+                  onClick={() => choosePlannedDay(offset)}
+                >
+                  {offset === 0 ? 'Aujourd’hui' : 'Demain'}
+                </button>
+              ))}
+              <label className={`departure-day-other ${plannedDate !== getDateValueIn(0) && plannedDate !== getDateValueIn(1) ? 'is-active' : ''}`}>
+                <CalendarDays size={15} aria-hidden="true" />
+                <span>
+                  {plannedDate !== getDateValueIn(0) && plannedDate !== getDateValueIn(1)
+                    ? formatShortDay(plannedDate)
+                    : 'Autre jour'}
+                </span>
+                <input
+                  type="date"
+                  value={plannedDate}
+                  min={getCurrentDateValue()}
+                  onChange={(event) => {
+                    if (event.target.value) setPlannedDate(event.target.value)
+                  }}
+                  aria-label="Choisir un autre jour de départ"
+                />
+              </label>
+            </div>
+
+            <div className="departure-time-row">
+              <button type="button" className="departure-step" onClick={() => shiftPlannedDeparture(-15)} aria-label="15 minutes plus tôt">
+                <Minus size={18} />
+              </button>
+              <label className="departure-time">
+                <span className="sr-only">Heure de départ</span>
+                <input
+                  id="departure-time"
+                  type="time"
+                  value={plannedTime}
+                  onChange={(event) => {
+                    if (event.target.value) setPlannedTime(event.target.value)
+                  }}
+                  aria-label="Heure prévue de départ"
+                />
+              </label>
+              <button type="button" className="departure-step" onClick={() => shiftPlannedDeparture(15)} aria-label="15 minutes plus tard">
+                <Plus size={18} />
+              </button>
+            </div>
+            <p className="departure-hint">Départ {formatPlannedDeparture(plannedDate, plannedTime)}</p>
+          </div>
+        )}
       </div>
 
       <button
@@ -1187,14 +1280,38 @@ function formatDuration(duration: number): string {
   return remainingMinutes === 0 ? `${hours} h` : `${hours} h ${remainingMinutes} min`
 }
 
+function toTimeValue(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function toDateValue(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function getCurrentTimeValue(): string {
-  const now = new Date()
-  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  return toTimeValue(new Date())
 }
 
 function getCurrentDateValue(): string {
+  return toDateValue(new Date())
+}
+
+/** Date (AAAA-MM-JJ) dans `offset` jours. */
+function getDateValueIn(offset: number): string {
   const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return toDateValue(new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset))
+}
+
+/** « ven. 14 nov. » */
+function formatShortDay(value: string): string {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
+/** « aujourd’hui à 16 h 15 », « demain à 08 h 30 », « le ven. 14 nov. à 09 h 00 » */
+function formatPlannedDeparture(date: string, time: string): string {
+  const day = date === getDateValueIn(0) ? 'aujourd’hui' : date === getDateValueIn(1) ? 'demain' : `le ${formatShortDay(date)}`
+  return `${day} à ${time.replace(':', ' h ')}`
 }
 
 function getFavoriteShortcut(value: string): FavoriteShortcut | null {

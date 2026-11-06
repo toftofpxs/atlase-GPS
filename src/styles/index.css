@@ -129,11 +129,25 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .location-dialog-actions button { min-height: 44px; padding: 0 14px; border: 0; border-radius: var(--radius-control); font-size: 14px; font-weight: 500; cursor: pointer; }
 .location-dialog-cancel { color: var(--color-text); background: transparent; }
 .location-dialog-confirm { color: #fff; background: #1a73e8; }
-.departure-schedule { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px 17px; }
-.departure-schedule-label { color: var(--color-muted); font-size: 14px; }
-.departure-schedule-fields { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, .85fr); gap: 8px; }
-.departure-schedule-fields label { min-width: 0; }
-.departure-schedule input { width: 100%; min-width: 0; min-height: 44px; padding: 0 8px; color: var(--color-text); background: var(--color-surface-raised); border: 1px solid var(--color-line); border-radius: var(--radius-control); font-size: 14px; font-variant-numeric: tabular-nums; }
+.departure-schedule { display: flex; min-width: 0; flex-direction: column; gap: 10px; margin: 8px 0 8px 17px; }
+.departure-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--color-surface-raised); border-radius: 999px; }
+.departure-mode button { display: flex; min-width: 0; min-height: 40px; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; color: var(--color-muted); background: transparent; border: 0; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: color 180ms ease-out, background 180ms ease-out; }
+.departure-mode button.is-active { color: var(--color-accent); background: var(--color-accent-soft); }
+.departure-later { display: flex; min-width: 0; flex-direction: column; gap: 10px; animation: departure-in 220ms ease-out; }
+@keyframes departure-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.departure-days { display: flex; min-width: 0; flex-wrap: wrap; gap: 8px; }
+.departure-days > button, .departure-day-other { position: relative; display: inline-flex; min-height: 38px; align-items: center; gap: 6px; padding: 0 14px; color: var(--color-text); background: transparent; border: 1px solid var(--color-line); border-radius: 999px; font: inherit; font-size: 14px; cursor: pointer; transition: color 180ms ease-out, background 180ms ease-out, border-color 180ms ease-out; }
+.departure-days > button.is-active, .departure-day-other.is-active { color: var(--color-accent); background: var(--color-accent-soft); border-color: transparent; }
+.departure-day-other { overflow: hidden; }
+/* Champ date natif invisible posé sur la pastille : un appui ouvre le sélecteur du téléphone. */
+.departure-day-other input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; border: 0; -webkit-appearance: none; appearance: none; cursor: pointer; }
+.departure-time-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
+.departure-step { display: grid; width: 44px; height: 44px; place-items: center; color: var(--color-text); background: var(--color-surface-raised); border: 0; border-radius: 50%; cursor: pointer; transition: transform 120ms ease-out; }
+.departure-step:active { transform: scale(.92); }
+.departure-time { display: block; min-width: 0; }
+.departure-time input { display: block; box-sizing: border-box; width: 100%; min-width: 0; height: 48px; margin: 0; padding: 0 12px; color: var(--color-text); background: var(--color-surface-raised); border: 1px solid var(--color-line); border-radius: var(--radius-control); font: inherit; font-size: 20px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; -webkit-appearance: none; appearance: none; }
+.departure-time input::-webkit-date-and-time-value { text-align: center; }
+.departure-hint { margin: 0; color: var(--color-muted); font-size: 13px; text-align: center; }
 .add-stop { display: flex; min-height: 44px; align-items: center; gap: 8px; margin: 8px 0 12px 17px; padding: 0; color: var(--color-accent); background: transparent; border: 0; font-size: 14px; cursor: pointer; }
 .route-mode-selector { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0 0 12px; }
 .route-mode-button { display: flex; min-width: 0; min-height: 56px; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 5px 2px; color: var(--color-muted); background: transparent; border: 0; border-radius: var(--radius-pill); font: inherit; cursor: pointer; transition: color 180ms ease-out, background 180ms ease-out; }
@@ -352,7 +366,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .profile-button, .search-status { display: none; }
   .search-wrap { width: auto; flex: 1; margin: 0; }
   .search-box { height: 48px; gap: 8px; padding: 0 10px; }
-  .search-box input, .departure-schedule input { font-size: 16px; }
+  .search-box input, .departure-day-other input { font-size: 16px; }
   .mobile-menu { display: inline-grid !important; width: 44px; height: 44px; }
   .mobile-menu svg { transition: transform 220ms ease-out; }
   .mobile-menu[aria-expanded='true'] svg { transform: rotate(90deg); }
