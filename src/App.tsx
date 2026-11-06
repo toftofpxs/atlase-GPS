@@ -51,6 +51,12 @@ function App() {
             ? (isNight ? 'dark' : 'light')
             : colorScheme.matches ? 'dark' : 'light'
       document.documentElement.dataset.theme = resolvedTheme
+      // Barre d'état du téléphone : même couleur que la barre du haut de l'appli (thème choisi, pas celui du système).
+      const surface = getComputedStyle(document.documentElement).getPropertyValue('--color-surface').trim()
+      document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+        meta.removeAttribute('media')
+        if (surface) meta.setAttribute('content', surface)
+      })
       setResolvedTheme(resolvedTheme)
     }
 

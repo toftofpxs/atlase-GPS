@@ -18,6 +18,7 @@
 
 * { box-sizing: border-box; }
 html, body { min-width: 0; overflow-x: hidden; overscroll-behavior-x: none; }
+html, body { background: var(--color-surface); }
 body { min-height: 100vh; margin: 0; }
 button, input { font: inherit; touch-action: manipulation; }
 button { color: inherit; }
@@ -377,7 +378,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .sidebar.sidebar-mobile-open { transform: translateX(0); transition-delay: 0s; visibility: visible; }
   .sidebar-close { display: inline-grid; color: var(--color-text); background: var(--color-canvas); }
   .map-canvas { position: absolute; inset: 0; border-radius: 0; }
-  .side-panel { position: absolute; right: 0; bottom: calc(40px + env(safe-area-inset-bottom)); left: 0; width: auto; max-height: 52%; padding: 24px 16px 16px; background: var(--color-surface); border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; box-shadow: var(--shadow-sheet); animation: sheet-open 180ms ease-out; touch-action: pan-y; transition: transform 240ms cubic-bezier(.2, .8, .2, 1); }
+  .side-panel { position: absolute; right: 0; bottom: calc(22px + env(safe-area-inset-bottom)); left: 0; width: auto; max-height: 52%; padding: 24px 16px 16px; background: var(--color-surface); border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; box-shadow: var(--shadow-sheet); animation: sheet-open 180ms ease-out; touch-action: pan-y; transition: transform 240ms cubic-bezier(.2, .8, .2, 1); }
   .side-panel-mobile-collapsed { transform: translateY(calc(100% - 44px)); pointer-events: none; }
   .sheet-handle { position: absolute; top: 0; left: 50%; z-index: 1; display: grid; width: 64px; height: 44px; place-items: center; padding: 0; background: transparent; border: 0; border-radius: var(--radius-pill); cursor: grab; touch-action: none; transform: translateX(-50%); pointer-events: auto; }
   .sheet-handle:active { cursor: grabbing; }
@@ -394,8 +395,8 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
     width: auto;
     align-items: center;
     justify-content: flex-end;
-    min-height: calc(40px + env(safe-area-inset-bottom));
-    padding: 3px 8px calc(3px + env(safe-area-inset-bottom));
+    min-height: calc(22px + env(safe-area-inset-bottom));
+    padding: 2px 8px calc(2px + env(safe-area-inset-bottom));
     background: var(--color-surface);
     border-top: 1px solid var(--color-line);
     pointer-events: none;
@@ -408,8 +409,11 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
     text-align: right;
     background: transparent;
     border-radius: 0;
-    font-size: 9px;
-    line-height: 1.25;
+    overflow: hidden;
+    font-size: 8px;
+    line-height: 1.2;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     pointer-events: auto;
   }
   .map-canvas.map-navigation-active .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib a { color: var(--color-muted); }
@@ -426,8 +430,8 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
     width: auto;
     align-items: center;
     justify-content: flex-end;
-    min-height: calc(40px + env(safe-area-inset-bottom));
-    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+    min-height: calc(22px + env(safe-area-inset-bottom));
+    padding: 2px 8px calc(2px + env(safe-area-inset-bottom));
     background: var(--color-surface);
     border-top: 1px solid var(--color-line);
     pointer-events: none;
@@ -440,8 +444,11 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
     text-align: right;
     background: transparent;
     border-radius: 0;
-    font-size: 10px;
-    line-height: 1.25;
+    overflow: hidden;
+    font-size: 8px;
+    line-height: 1.2;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     pointer-events: auto;
   }
   .map-canvas:not(.map-navigation-active) .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib a { color: var(--color-muted); }
@@ -513,7 +520,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 @media (max-width: 760px) {
   /* Panneau du trajet : suit le doigt, trois positions. */
   .side-panel { transition: transform 260ms cubic-bezier(.2, .8, .2, 1), max-height 260ms cubic-bezier(.2, .8, .2, 1); }
-  .side-panel-mobile-full { max-height: calc(100% - 52px - env(safe-area-inset-bottom)); }
+  .side-panel-mobile-full { max-height: calc(100% - 34px - env(safe-area-inset-bottom)); }
   .sheet-handle { width: min(100%, 200px); }
 
   /* Cibles tactiles plus grandes pendant la conduite. */
