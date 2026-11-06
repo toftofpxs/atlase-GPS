@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Map as MapLibreMap, Marker as MapLibreMarker } from 'maplibre-gl'
-import { Car, Footprints, LoaderCircle, MapPin, RefreshCw, Trash2, X } from 'lucide-react'
+import { Car, Footprints, LoaderCircle, MapPin, Move, RefreshCw, Trash2, X } from 'lucide-react'
 import { reverseGeocode } from '../../services/geocoding'
 import { haptic } from '../../services/haptics'
 import { getCurrentLocation, getLocationErrorMessage } from '../../services/location'
@@ -33,6 +33,8 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
   const selectSection = useInterfaceStore((state) => state.selectSection)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState<'save' | 'walk' | null>(null)
+  /** Mode « placer sur la carte » : le prochain appui sur la carte enregistre l'emplacement. */
+  const [placing, setPlacing] = useState(false)
   const [error, setError] = useState('')
   const [endPrompt, setEndPrompt] = useState<{ coordinates: [number, number]; accuracy: number } | null>(null)
   const [now, setNow] = useState(Date.now)
@@ -76,16 +78,33 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
     let disposed = false
     void import('maplibre-gl').then(({ Marker }) => {
       if (disposed) return
-      const element = document.createElement('button')
-      element.type = 'button'
+      // Important : aucune rotation, translation ni échelle sur l'élément racine. MapLibre le place
+      // avec « transform » ; les propriétés rotate/translate/scale s'y combineraient et
+      // décaleraient le repère à chaque zoom. La forme et l'animation sont dans l'épingle intérieure.
+      const element = document.createElement('div')
       element.className = 'parked-car-marker'
+      element.setAttribute('role', 'button')
+      element.setAttribute('tabindex', '0')
       element.setAttribute('aria-label', 'Ma voiture garée')
-      element.innerHTML = '<span aria-hidden="true">P</span>'
+      element.innerHTML =
+        '<svg class="parked-car-pin" viewBox="0 0 36 46" width="36" height="46" aria-hidden="true">' +
+        '<path d="M18 45C18 45 34 29.5 34 17.5A16 16 0 0 0 2 17.5C2 29.5 18 45 18 45Z" fill="#5b4bd6" stroke="#fff" stroke-width="3"/>' +
+        '<text x="18" y="23.5" text-anchor="middle" font-size="17" font-weight="800" fill="#fff" font-family="DM Sans, Arial, sans-serif">P</text>' +
+        '</svg>'
+      const openFromMarker = () => {
+        haptic('tap')
+        setError('')
+        setOpen(true)
+      }
       element.addEventListener('click', (event) => {
         event.stopPropagation()
-        haptic('tap')
-        setOpen(true)
+        openFromMarker()
       })
+      element.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') openFromMarker()
+      })
+      // Pas de glissement au doigt : en déplaçant la carte depuis l'épingle, on bougerait la voiture
+      // sans le vouloir. Pour corriger l'emplacement : bouton « Déplacer » de la fiche.
       markerRef.current = new Marker({ element, anchor: 'bottom' }).setLngLat(parkedCar.coordinates).addTo(map)
     })
     return () => {
@@ -95,8 +114,8 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
     }
   }, [map, mapReady, parkedCar, drivingActive])
 
-  const save = (coordinates: [number, number], accuracy: number | null) => {
-    const entry: ParkedCarData = { coordinates, accuracy, savedAt: Date.now(), address: null }
+  const save = (coordinates: [number, number], accuracy: number | null, savedAt = Date.now()) => {
+    const entry: ParkedCarData = { coordinates, accuracy, savedAt, address: null }
     setParkedCar(entry)
     haptic('confirm')
     // L'adresse arrive un peu après ; on ne l'applique que si l'emplacement n'a pas changé entre-temps.
@@ -104,11 +123,43 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
       .then((address) => {
         if (!address) return
         const current = useInterfaceStore.getState().parkedCar
-        if (current?.savedAt === entry.savedAt) setParkedCar({ ...current, address })
+        if (
+          current?.savedAt === entry.savedAt &&
+          current.coordinates[0] === coordinates[0] &&
+          current.coordinates[1] === coordinates[1]
+        ) {
+          setParkedCar({ ...current, address })
+        }
       })
       .catch(() => {
         // Sans adresse, la fiche affiche simplement « Emplacement enregistré ».
       })
+  }
+
+  useEffect(() => {
+    if (!placing || !map) return
+    const canvas = map.getCanvas()
+    canvas.style.cursor = 'crosshair'
+    const handleClick = (event: { lngLat: { lng: number; lat: number } }) => {
+      // Correction d'un emplacement existant : on garde l'heure de stationnement d'origine.
+      save([event.lngLat.lng, event.lngLat.lat], null, useInterfaceStore.getState().parkedCar?.savedAt)
+      setPlacing(false)
+      setOpen(true)
+    }
+    map.once('click', handleClick)
+    return () => {
+      map.off('click', handleClick)
+      canvas.style.cursor = ''
+    }
+    // save est recréé à chaque rendu : on ne réagit qu'à l'activation du mode.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placing, map])
+
+  const startPlacing = () => {
+    haptic('tap')
+    setError('')
+    setOpen(false)
+    setPlacing(true)
   }
 
   const saveCurrentPosition = async () => {
@@ -202,6 +253,21 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
           document.body,
         )}
 
+      {placing &&
+        createPortal(
+          <div className="parked-car-prompt parked-car-placing" role="status">
+            <span className="parked-car-prompt-icon" aria-hidden="true">P</span>
+            <span className="parked-car-prompt-copy">
+              <strong>Touchez la carte</strong>
+              <span>à l’endroit où est garée votre voiture.</span>
+            </span>
+            <button type="button" className="parked-car-prompt-close" onClick={() => setPlacing(false)} aria-label="Annuler">
+              <X size={18} />
+            </button>
+          </div>,
+          document.body,
+        )}
+
       {open &&
         createPortal(
           <section className="parked-car-panel" aria-label="Ma voiture">
@@ -228,10 +294,16 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
                   {busy === 'walk' ? <LoaderCircle size={18} className="route-button-spinner" /> : <Footprints size={18} />}
                   Y aller à pied
                 </button>
-                <button type="button" onClick={() => void saveCurrentPosition()} disabled={busy !== null}>
-                  {busy === 'save' ? <LoaderCircle size={18} className="route-button-spinner" /> : <RefreshCw size={18} />}
-                  Garée ici maintenant
-                </button>
+                <div className="parked-car-row">
+                  <button type="button" onClick={startPlacing} disabled={busy !== null}>
+                    <Move size={18} />
+                    Déplacer
+                  </button>
+                  <button type="button" onClick={() => void saveCurrentPosition()} disabled={busy !== null}>
+                    {busy === 'save' ? <LoaderCircle size={18} className="route-button-spinner" /> : <RefreshCw size={18} />}
+                    Ma position
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="is-danger"
@@ -250,7 +322,11 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
               <div className="parked-car-actions">
                 <button type="button" className="parked-car-primary" onClick={() => void saveCurrentPosition()} disabled={busy !== null}>
                   {busy === 'save' ? <LoaderCircle size={18} className="route-button-spinner" /> : <MapPin size={18} />}
-                  Enregistrer ma position actuelle
+                  Ma position actuelle
+                </button>
+                <button type="button" onClick={startPlacing} disabled={busy !== null}>
+                  <Move size={18} />
+                  Placer sur la carte
                 </button>
                 <p className="parked-car-hint">
                   À la fin d’un trajet en voiture, Atlas vous proposera aussi de l’enregistrer automatiquement.

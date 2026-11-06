@@ -729,9 +729,9 @@ div.nav-sheet-summary { cursor: default; }
 /* Pas de flash gris au toucher (Android) : on donne notre propre retour visuel. */
 * { -webkit-tap-highlight-color: transparent; }
 /* Bouton qui s'enfonce légèrement sous le doigt (propriété « scale » : ne gêne pas les « transform » existants). */
-:where(button, a, [role='option']) { transition: scale 120ms ease-out; }
+:where(button, a, [role='option']):not(.maplibregl-marker) { transition: scale 120ms ease-out; }
 @media (hover: none) {
-  :where(button, a, [role='option']):not(:disabled):active { scale: 0.96; }
+  :where(button, a, [role='option']):not(:disabled):not(.maplibregl-marker):active { scale: 0.96; }
 }
 
 /* Thème sombre : texte foncé sur le bleu clair des boutons principaux (le blanc était presque illisible). */
@@ -794,8 +794,9 @@ div.nav-sheet-summary { cursor: default; }
 :root[data-theme='dark'] .parked-car-chip.has-car svg { color: #a99cff; }
 
 /* Repère « P » sur la carte, en forme d'épingle. */
-.parked-car-marker { display: grid; width: 38px; height: 38px; place-items: center; padding: 0; color: #fff; background: #5b4bd6; border: 3px solid #fff; border-radius: 50% 50% 50% 6px; box-shadow: 0 3px 10px rgb(0 0 0 / 35%); cursor: pointer; rotate: -45deg; animation: parked-pin-drop 420ms cubic-bezier(.2, 1.4, .4, 1) both; }
-.parked-car-marker span { rotate: 45deg; font-size: 17px; font-weight: 800; line-height: 1; }
+/* L'élément racine est positionné par MapLibre (transform) : aucune rotation/translation/échelle ici. */
+.parked-car-marker { width: 36px; height: 46px; cursor: pointer; }
+.parked-car-pin { display: block; filter: drop-shadow(0 3px 5px rgb(0 0 0 / 35%)); animation: parked-pin-drop 420ms cubic-bezier(.2, 1.4, .4, 1) both; }
 @keyframes parked-pin-drop { from { opacity: 0; translate: 0 -24px; } to { opacity: 1; translate: 0 0; } }
 
 /* Fiche « Ma voiture » : même présentation que « Sur le trajet ». */
@@ -811,6 +812,8 @@ div.nav-sheet-summary { cursor: default; }
 .parked-car-actions button:disabled { cursor: wait; opacity: .6; }
 .parked-car-actions .parked-car-primary { color: #fff; background: #1a73e8; }
 .parked-car-actions .is-danger { color: var(--color-danger); }
+.parked-car-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.parked-car-placing { border: 2px solid #5b4bd6; }
 .parked-car-hint { margin: 0; color: var(--color-muted); font-size: 12px; text-align: center; }
 .parked-car-error { margin: 0; color: var(--color-danger); font-size: 13px; }
 
@@ -823,5 +826,5 @@ div.nav-sheet-summary { cursor: default; }
 @keyframes parked-prompt-in { from { opacity: 0; translate: 0 -12px; } to { opacity: 1; translate: 0 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .parked-car-marker, .parked-car-prompt, .parked-car-panel { animation: none; }
+  .parked-car-pin, .parked-car-prompt, .parked-car-panel { animation: none; }
 }
