@@ -9,27 +9,16 @@ import type {
 } from 'maplibre-gl'
 import {
   AlertTriangle,
-  ArrowUp,
-  ArrowUpLeft,
-  ArrowUpRight,
   Car,
-  CornerUpLeft,
-  CornerUpRight,
-  Flag,
   Gauge,
   LocateFixed,
   LoaderCircle,
-  Merge,
-  RotateCcw,
   Route as RouteIcon,
-  Share2,
+  ChevronUp,
   Shield,
-  Split,
   TriangleAlert,
-  Undo2,
   X,
 } from 'lucide-react'
-import type { RouteStep } from '../../types/geocoding'
 import { getRouteGeometry } from '../../services/routeGeometry'
 import { getMapStyleUrl, MAP_WORKER_URL } from '../../services/mapConfig'
 import {
@@ -53,6 +42,15 @@ import { useFreeDrive } from '../../hooks/useFreeDrive'
 import { applyDrivingMapLook, prefetchRouteTiles, PREFETCH_REFRESH_METERS } from '../../services/drivingMap'
 import { AlongRouteSearch } from './AlongRouteSearch'
 import { ParkedCar } from './ParkedCar'
+import { NavigationSheetDetails } from './NavigationSheetDetails'
+import {
+  formatArrivalTime,
+  formatDistance,
+  formatDistanceParts,
+  formatDuration,
+  getManeuverIcon,
+  getShortManeuver,
+} from './maneuverFormat'
 import { LaneGuidance } from './LaneGuidance'
 
 /** « Puis » : affiché si la manœuvre suivante est à moins de cette distance de la prochaine… */
@@ -86,7 +84,6 @@ const getOverspeedTolerance = (limit: number) => Math.max(5, limit * 0.05)
 /** Délai minimum entre deux bips de survitesse. */
 const OVERSPEED_BEEP_COOLDOWN_MS = 30_000
 import {
-  formatManeuver,
   getRemainingRouteMetrics,
   getRouteBearing,
   isOffRoute,
@@ -165,6 +162,9 @@ export function MapCanvas() {
   const [routeReports, setRouteReports] = useState<RouteReport[]>([])
   const [reportMode, setReportMode] = useState<RouteReportType | null>(null)
   const [reportMenuOpen, setReportMenuOpen] = useState(false)
+  /** Feuille de navigation dépliée (trajets disponibles, prochaines étapes, raccourcis). */
+  const [navSheetExpanded, setNavSheetExpanded] = useState(false)
+  const navSheetPointerY = useRef<number | null>(null)
   const [reportError, setReportError] = useState('')
   const [routeSpeedLimits, setRouteSpeedLimits] = useState<SpeedLimitSpan[] | null>(null)
   const [speedLimitsStatus, setSpeedLimitsStatus] = useState<SpeedLimitStatus>('idle')
@@ -729,6 +729,10 @@ export function MapCanvas() {
     )
     map.setPaintProperty(TRAFFIC_LAYER_ID, 'line-opacity', drivingActive ? 0.5 : 0.85)
   }, [drivingActive, trafficEnabled, status])
+
+  useEffect(() => {
+    if (!navigationActive) setNavSheetExpanded(false)
+  }, [navigationActive])
 
   // Nouveau trajet : on repart de zéro.
   useEffect(() => {
@@ -1736,16 +1740,53 @@ export function MapCanvas() {
           {shareFeedback && <p className="map-share-feedback" role="status">{shareFeedback}</p>}
 
           {/* Feuille du bas : temps restant en grand, distance et heure d'arrivée, aperçu, quitter. */}
-          <section className="nav-sheet" aria-label="Résumé de navigation">
-            <span className="nav-sheet-grip" aria-hidden="true" />
+          <section
+            className={`nav-sheet nav-sheet-expandable ${navSheetExpanded ? 'is-expanded' : ''}`}
+            aria-label="Résumé de navigation"
+          >
+            {/* Barre : un appui ou un glissement vers le haut déplie la feuille, vers le bas la replie. */}
+            <div
+              className="nav-sheet-bar"
+              onPointerDown={(event) => {
+                navSheetPointerY.current = event.clientY
+                // Le geste reste suivi par la barre même quand le doigt la quitte en glissant.
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerCancel={() => {
+                navSheetPointerY.current = null
+              }}
+              onPointerUp={(event) => {
+                const startY = navSheetPointerY.current
+                navSheetPointerY.current = null
+                if (startY === null) return
+                const deltaY = event.clientY - startY
+                if (deltaY < -30 && !navSheetExpanded) {
+                  haptic('tap')
+                  setNavSheetExpanded(true)
+                } else if (deltaY > 30 && navSheetExpanded) {
+                  haptic('tap')
+                  setNavSheetExpanded(false)
+                }
+              }}
+            >
+            <button
+              type="button"
+              className="nav-sheet-grip"
+              onClick={() => setNavSheetExpanded((expanded) => !expanded)}
+              aria-label={navSheetExpanded ? 'Replier' : 'Plus d’options : trajets, étapes'}
+              aria-expanded={navSheetExpanded}
+            />
             <button
               type="button"
               className="nav-sheet-summary"
-              onClick={() => void shareArrival()}
-              disabled={!remaining}
+              onClick={() => {
+                haptic('tap')
+                setNavSheetExpanded((expanded) => !expanded)
+              }}
+              aria-expanded={navSheetExpanded}
               aria-label={
                 remaining
-                  ? `${formatDuration(remaining.duration)} restantes, ${formatDistance(remaining.distance)}, arrivée à ${formatArrivalTime(remaining.duration)}. Partager l’heure d’arrivée`
+                  ? `${formatDuration(remaining.duration)} restantes, ${formatDistance(remaining.distance)}, arrivée à ${formatArrivalTime(remaining.duration)}. ${navSheetExpanded ? 'Replier' : 'Voir les trajets et les étapes'}`
                   : 'Temps restant inconnu'
               }
             >
@@ -1757,7 +1798,7 @@ export function MapCanvas() {
               </strong>
               <span>
                 {remaining ? `${formatDistance(remaining.distance)} · ${formatArrivalTime(remaining.duration)}` : 'Calcul en cours'}
-                <Share2 size={13} aria-hidden="true" />
+                <ChevronUp size={15} className="nav-sheet-chevron" aria-hidden="true" />
               </span>
             </button>
             <button
@@ -1780,6 +1821,31 @@ export function MapCanvas() {
             >
               Quitter
             </button>
+            </div>
+            {navSheetExpanded && route && remaining && (
+              <NavigationSheetDetails
+                route={route}
+                along={routeProgress}
+                stepIndex={guidance?.stepIndex ?? navigationStepIndex}
+                currentDuration={remaining.duration}
+                currentDistance={remaining.distance}
+                trafficEnabled={trafficEnabled}
+                onToggleTraffic={() => {
+                  haptic('tap')
+                  setTrafficEnabled((enabled) => !enabled)
+                }}
+                onShare={() => void shareArrival()}
+                onOverview={() => {
+                  setNavSheetExpanded(false)
+                  showRouteOverview()
+                }}
+                onReport={() => {
+                  setNavSheetExpanded(false)
+                  setReportMenuOpen(true)
+                }}
+                onRouteChanged={() => setNavSheetExpanded(false)}
+              />
+            )}
           </section>
           {stopConfirmOpen && (
             <div className="map-stop-confirm-backdrop" onClick={() => setStopConfirmOpen(false)}>
@@ -1944,70 +2010,6 @@ export function MapCanvas() {
     </section>
   )
 }
-
-/** Icône de manœuvre plus précise que gauche/droite : légèrement, bifurcation, arrivée… */
-function getManeuverIcon(step: RouteStep | undefined) {
-  if (!step) return ArrowUp
-  const { type, modifier } = step.maneuver
-  if (type === 'arrive') return Flag
-  if (type === 'roundabout' || type === 'rotary' || type === 'roundabout turn' || type === 'exit rotary') return RotateCcw
-  if (modifier === 'uturn') return Undo2
-  if (type === 'fork') return Split
-  if (type === 'merge') return Merge
-  switch (modifier) {
-    case 'slight left':
-      return ArrowUpLeft
-    case 'slight right':
-      return ArrowUpRight
-    case 'left':
-    case 'sharp left':
-      return CornerUpLeft
-    case 'right':
-    case 'sharp right':
-      return CornerUpRight
-    default:
-      return ArrowUp
-  }
-}
-
-/** Consigne courte, sans le nom de rue (affiché en grand à côté) : « Tournez à gauche ». */
-function getShortManeuver(step: RouteStep): string {
-  return formatManeuver({ ...step, name: '' }).replace(/\.$/, '')
-}
-
-/** Distance en deux parties pour le bandeau : « 40 » en grand, « m » en petit. */
-function formatDistanceParts(distance: number): { value: string; unit: string } {
-  if (distance < 1000) {
-    // Arrondi au pas de 10 m au-delà de 100 m (comme les GPS) : moins de chiffres qui défilent.
-    const rounded = distance < 100 ? Math.round(distance) : Math.round(distance / 10) * 10
-    return { value: String(rounded), unit: 'm' }
-  }
-  return {
-    value: new Intl.NumberFormat('fr-FR', { maximumFractionDigits: distance < 10_000 ? 1 : 0 }).format(distance / 1000),
-    unit: 'km',
-  }
-}
-
-function formatDistance(distance: number): string {
-  if (distance < 1000) return `${Math.round(distance)} m`
-  return `${new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(distance / 1000)} km`
-}
-
-function formatDuration(duration: number): string {
-  const minutes = Math.ceil(duration / 60)
-  if (minutes < 1) return 'Arrivée'
-  if (minutes < 60) return `${minutes} min`
-  const hours = Math.floor(minutes / 60)
-  const remainingMinutes = minutes % 60
-  return remainingMinutes === 0 ? `${hours} h` : `${hours} h ${remainingMinutes} min`
-}
-
-function formatArrivalTime(duration: number): string {
-  return new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' }).format(
-    new Date(Date.now() + duration * 1000),
-  )
-}
-
 
 function getRouteReportLabel(type: RouteReportType): string {
   switch (type) {

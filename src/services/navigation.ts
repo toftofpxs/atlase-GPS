@@ -82,6 +82,11 @@ export function getNavigationGuidance(
   }
 }
 
+/** Distance depuis le départ (en mètres) de chaque manœuvre du trajet. */
+export function getStepPositions(route: RouteSummary): number[] {
+  return getRouteTimeline(route).stepAlong
+}
+
 /** Temps prévu par Valhalla (sans trafic) entre deux distances du trajet, en secondes. */
 export function getRouteSecondsBetween(route: RouteSummary, from: number, to: number): number {
   if (to <= from) return 0

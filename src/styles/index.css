@@ -828,3 +828,57 @@ div.nav-sheet-summary { cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .parked-car-pin, .parked-car-prompt, .parked-car-panel { animation: none; }
 }
+
+/* ===== Feuille de navigation dépliable ===== */
+.nav-sheet.nav-sheet-expandable { flex-direction: column; align-items: stretch; gap: 0; }
+.nav-sheet-bar { display: flex; align-items: center; gap: 12px; touch-action: none; }
+/* Poignée : zone de toucher large, trait visible au centre. */
+.nav-sheet-expandable .nav-sheet-grip { top: 0; width: 96px; height: 22px; padding: 0; background: transparent; border: 0; cursor: pointer; }
+.nav-sheet-expandable .nav-sheet-grip::before { position: absolute; top: 6px; left: 50%; width: 36px; height: 4px; content: ''; background: var(--color-line); border-radius: var(--radius-pill); transform: translateX(-50%); }
+.nav-sheet-chevron { transition: rotate 220ms ease; }
+.nav-sheet.is-expanded .nav-sheet-chevron { rotate: 180deg; }
+
+@keyframes nav-details-in { from { opacity: 0; translate: 0 16px; } to { opacity: 1; translate: 0 0; } }
+.nav-details { display: flex; max-height: min(58dvh, 540px); flex-direction: column; gap: 18px; margin-top: 14px; padding-top: 14px; overflow-y: auto; border-top: 1px solid var(--color-line); overscroll-behavior: contain; animation: nav-details-in 260ms cubic-bezier(.2, .8, .2, 1) both; }
+.nav-details-section { display: flex; flex-direction: column; gap: 8px; }
+.nav-details-heading { display: flex; align-items: center; justify-content: space-between; }
+.nav-details h2 { margin: 0; color: var(--color-muted); font-size: 13px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.nav-details-refresh { display: grid; width: 40px; height: 40px; place-items: center; color: var(--color-muted); background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+.nav-details-message { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--color-muted); font-size: 14px; }
+.nav-details-message.is-error { color: var(--color-danger); }
+
+/* Trajets disponibles */
+.nav-routes { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.nav-route { display: flex; width: 100%; min-height: 60px; align-items: center; gap: 12px; padding: 8px 12px; color: var(--color-text); text-align: left; background: var(--color-canvas); border: 1px solid transparent; border-radius: 14px; font: inherit; cursor: pointer; }
+.nav-route.is-current { cursor: default; border-color: var(--color-accent); background: var(--color-accent-soft); }
+.nav-route-check, .nav-route-index { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 50%; font-size: 13px; font-weight: 700; }
+.nav-route-check { color: #fff; background: var(--color-accent); }
+:root[data-theme='dark'] .nav-route-check { color: #0b1f3f; }
+.nav-route-index { color: var(--color-muted); background: var(--color-surface-raised); }
+.nav-route-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.nav-route-copy strong { font-size: 15px; }
+.nav-route-copy span { color: var(--color-muted); font-size: 13px; }
+.nav-route-time { font-size: 17px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.nav-route-time.is-faster { color: #1e8e3e; }
+:root[data-theme='dark'] .nav-route-time.is-faster { color: #6dd58c; }
+
+/* Raccourcis */
+.nav-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.nav-actions button { display: flex; min-height: 70px; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 6px 4px; color: var(--color-text); background: var(--color-canvas); border: 0; border-radius: 14px; font: inherit; font-size: 12px; font-weight: 600; text-align: center; cursor: pointer; }
+.nav-actions button.is-active { color: var(--color-accent); background: var(--color-accent-soft); }
+
+/* Prochaines étapes */
+.nav-steps { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.nav-steps li { display: flex; min-height: 54px; align-items: center; gap: 12px; padding: 6px 2px; border-bottom: 1px solid var(--color-line); }
+.nav-steps li:last-child { border-bottom: 0; }
+.nav-step-icon { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; color: var(--color-text); background: var(--color-canvas); border-radius: 10px; }
+.nav-steps li.is-next .nav-step-icon { color: #fff; background: var(--nav-banner-bg, #1a73e8); }
+.nav-step-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.nav-step-copy strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.nav-step-copy span { color: var(--color-muted); font-size: 13px; }
+.nav-step-distance { color: var(--color-muted); font-size: 14px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-details { animation: none; }
+  .nav-sheet-chevron { transition: none; }
+}
