@@ -82,6 +82,18 @@ export function getNavigationGuidance(
   }
 }
 
+/** Temps prévu par Valhalla (sans trafic) entre deux distances du trajet, en secondes. */
+export function getRouteSecondsBetween(route: RouteSummary, from: number, to: number): number {
+  if (to <= from) return 0
+  let seconds = 0
+  for (const span of getRouteTimeline(route).spans) {
+    const length = span.end - span.start
+    if (length <= 0 || span.end <= from || span.start >= to) continue
+    seconds += (span.duration * (Math.min(span.end, to) - Math.max(span.start, from))) / length
+  }
+  return seconds
+}
+
 export function getRemainingRouteMetrics(
   route: RouteSummary,
   guidance: NavigationGuidance | null,

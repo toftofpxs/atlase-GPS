@@ -19,9 +19,9 @@ function precacheManifest(): Plugin {
 }
 
 export default defineConfig(({ mode }) => {
-  // HERE_API_KEY (sans préfixe VITE_) reste côté serveur : il n'est jamais inclus dans le bundle.
+  // TOMTOM_API_KEY (sans préfixe VITE_) reste côté serveur : elle n'est jamais incluse dans le bundle.
   const env = loadEnv(mode, '.', '')
-  const apiKey = encodeURIComponent(env.HERE_API_KEY ?? '')
+  const apiKey = encodeURIComponent(env.TOMTOM_API_KEY ?? '')
 
   return {
     plugins: [react(), precacheManifest()],
@@ -36,15 +36,16 @@ export default defineConfig(({ mode }) => {
     server: {
       allowedHosts: ['weak-yaks-fold.loca.lt'],
       proxy: {
-        // En dev, /api/traffic/* est relayé vers HERE avec la clé ajoutée ici.
+        // En dev, les tuiles /api/traffic/flow/{z}/{x}/{y}.pbf sont relayées vers TomTom avec la clé ajoutée ici.
         // En prod, c'est la fonction Netlify netlify/functions/traffic.mts qui fait la même chose.
         '/api/traffic': {
-          target: 'https://data.traffic.hereapi.com',
+          target: 'https://api.tomtom.com',
           changeOrigin: true,
-          rewrite: (path) => {
-            const target = path.replace(/^\/api\/traffic/, '/v7')
-            return `${target}${target.includes('?') ? '&' : '?'}apiKey=${apiKey}`
-          },
+          rewrite: (path) =>
+            path.replace(
+              /^\/api\/traffic\/flow\/(\d+)\/(\d+)\/(\d+)\.pbf(\?.*)?$/,
+              `/traffic/map/4/tile/flow/relative/$1/$2/$3.pbf?key=${apiKey}`,
+            ),
         },
       },
     },

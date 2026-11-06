@@ -63,6 +63,8 @@ export function prefetchRouteTiles(map: MapLibreMap, route: RouteSummary, fromAl
     const source = map.getSource<VectorTileSource>(id)
     const templates = source?.tiles
     if (!source || !templates?.length) continue
+    // Trafic en temps réel : périmé en 2 minutes, et le service worker ne le met pas en cache.
+    if (templates.some((template) => template.includes('/api/traffic/'))) continue
     const maxZoom = Math.min(source.maxzoom ?? 14, 16)
     const minZoom = source.minzoom ?? 0
     // Zoom max (détail) + deux niveaux plus larges (horizon de la vue inclinée, dézoom sur voie rapide).

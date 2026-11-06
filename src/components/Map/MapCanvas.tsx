@@ -3,6 +3,7 @@ import type {
   ErrorEvent,
   Map as MapLibreMap,
   MapMouseEvent,
+  MapSourceDataEvent,
   MapTouchEvent,
   Marker as MapLibreMarker,
 } from 'maplibre-gl'
@@ -91,10 +92,30 @@ import {
 } from '../../services/navigation'
 import { useInterfaceStore } from '../../stores/interfaceStore'
 import type { FavoriteShortcut } from '../../stores/interfaceStore'
-import { getTrafficFlow, TRAFFIC_MIN_ZOOM, TRAFFIC_REFRESH_MS } from '../../services/traffic'
+import {
+  getTrafficTileUrl,
+  TRAFFIC_MAX_TILE_ZOOM,
+  TRAFFIC_MIN_ZOOM,
+  TRAFFIC_REFRESH_MS,
+  TRAFFIC_SOURCE_LAYER,
+} from '../../services/traffic'
+import {
+  getRemainingTrafficDelay,
+  getRouteTraffic,
+  ROUTE_TRAFFIC_AHEAD_METERS,
+  ROUTE_TRAFFIC_REFRESH_MS,
+  type RouteTraffic,
+} from '../../services/routeTraffic'
+import { getRouteSlice, type Point } from '../../services/routeGeometry'
 
-const TRAFFIC_SOURCE_ID = 'here-traffic'
-const TRAFFIC_LAYER_ID = 'here-traffic-line'
+const ROUTE_TRAFFIC_SOURCE_ID = 'route-traffic'
+const ROUTE_TRAFFIC_LAYER_ID = 'route-traffic-line'
+/** Retard à partir duquel le temps restant passe en orange, puis en rouge (secondes). */
+const TRAFFIC_DELAY_SLOW_SECONDS = 2 * 60
+const TRAFFIC_DELAY_HEAVY_SECONDS = 10 * 60
+
+const TRAFFIC_SOURCE_ID = 'tomtom-traffic'
+const TRAFFIC_LAYER_ID = 'tomtom-traffic-line'
 const TRAFFIC_STORAGE_KEY = 'gps:traffic-enabled'
 
 type MapStatus = 'loading' | 'ready' | 'error'
@@ -130,6 +151,8 @@ export function MapCanvas() {
     }
   })
   const [trafficStatus, setTrafficStatus] = useState<'idle' | 'loading' | 'ready' | 'zoom' | 'error'>('idle')
+  const [routeTraffic, setRouteTraffic] = useState<RouteTraffic | null>(null)
+  const [routeTrafficTick, setRouteTrafficTick] = useState(0)
   const trafficButtonRef = useRef<HTMLButtonElement | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -183,7 +206,7 @@ export function MapCanvas() {
   const isDarkMapStyle = resolvedTheme === 'dark'
   const resolvedThemeRef = useRef(resolvedTheme)
   resolvedThemeRef.current = resolvedTheme
-  const remaining = useMemo(() => (route ? getRemainingRouteMetrics(route, guidance) : null), [route, guidance])
+  const baseRemaining = useMemo(() => (route ? getRemainingRouteMetrics(route, guidance) : null), [route, guidance])
   const stepIndexNow = guidance?.stepIndex ?? navigationStepIndex
   const currentStep = route?.steps[stepIndexNow]
   const offRoute = currentPosition ? isOffRoute(guidance, currentPosition.accuracy) : false
@@ -211,6 +234,33 @@ export function MapCanvas() {
   const previousProgress = routeProgressRef.current.route === route ? routeProgressRef.current.along : 0
   const routeProgress = guidance && guidance.distanceFromRoute <= 100 ? guidance.along : previousProgress
   routeProgressRef.current = { route, along: routeProgress }
+  // Retard dû aux bouchons sur le reste du trajet (0 si le trafic est désactivé).
+  const trafficDelay = trafficEnabled ? getRemainingTrafficDelay(routeTraffic, routeProgress) : 0
+  const remaining = baseRemaining && { ...baseRemaining, duration: baseRemaining.duration + trafficDelay }
+  const trafficDelayLevel =
+    trafficDelay >= TRAFFIC_DELAY_HEAVY_SECONDS ? 'heavy' : trafficDelay >= TRAFFIC_DELAY_SLOW_SECONDS ? 'slow' : null
+  // Fenêtre analysée : on la décale tous les 50 km parcourus (et on rafraîchit toutes les 5 minutes).
+  const routeTrafficFrom = Math.floor(routeProgress / (ROUTE_TRAFFIC_AHEAD_METERS / 2)) * (ROUTE_TRAFFIC_AHEAD_METERS / 2)
+  // Portions ralenties devant la position, redessinées tous les 100 m seulement.
+  const routeProgressStep = Math.floor(routeProgress / 100) * 100
+  const routeTrafficData = useMemo(() => {
+    if (!route || !routeTraffic || !trafficEnabled) return null
+    const coordinates = route.coordinates as Point[]
+    return {
+      type: 'FeatureCollection' as const,
+      features: routeTraffic.spans
+        .filter((span) => span.end > routeProgressStep)
+        .map((span) => ({
+          type: 'Feature' as const,
+          properties: { kind: span.kind },
+          geometry: {
+            type: 'LineString' as const,
+            coordinates: getRouteSlice(coordinates, Math.max(span.start, routeProgressStep), span.end),
+          },
+        }))
+        .filter((feature) => feature.geometry.coordinates.length >= 2),
+    }
+  }, [route, routeTraffic, trafficEnabled, routeProgressStep])
   const freeDrive = useFreeDrive(freeDriveActive)
   // Rue sur laquelle on roule (étiquette en bas de la carte).
   const currentRoadName = navigationActive
@@ -498,7 +548,7 @@ export function MapCanvas() {
     }
   }, [favorites, status])
 
-  // Trafic HERE : bouton, préférence mémorisée, couche colorée selon l'embouteillage.
+  // Trafic TomTom : bouton, préférence mémorisée, couche colorée selon l'embouteillage.
   useEffect(() => {
     const button = trafficButtonRef.current
     if (button) {
@@ -526,105 +576,141 @@ export function MapCanvas() {
       return
     }
 
-    let controller: AbortController | null = null
-    let debounce: number | undefined
-    // Zone déjà chargée : tant que l'écran reste dedans, pas de nouvelle requête.
-    let loaded: { west: number; south: number; east: number; north: number; detailed: boolean; time: number } | null = null
+    // Tuiles vectorielles TomTom : MapLibre ne charge que la zone visible, comme le fond de carte.
+    if (!map.getSource(TRAFFIC_SOURCE_ID)) {
+      map.addSource(TRAFFIC_SOURCE_ID, {
+        type: 'vector',
+        tiles: [getTrafficTileUrl()],
+        minzoom: TRAFFIC_MIN_ZOOM,
+        maxzoom: TRAFFIC_MAX_TILE_ZOOM,
+        attribution: 'Trafic © TomTom',
+      })
+    }
+    if (!map.getLayer(TRAFFIC_LAYER_ID)) {
+      const firstSymbolLayer = map.getStyle().layers?.find((layer) => layer.type === 'symbol')?.id
+      map.addLayer(
+        {
+          id: TRAFFIC_LAYER_ID,
+          type: 'line',
+          source: TRAFFIC_SOURCE_ID,
+          'source-layer': TRAFFIC_SOURCE_LAYER,
+          minzoom: TRAFFIC_MIN_ZOOM,
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            // traffic_level TomTom (style « relative ») : vitesse actuelle / vitesse fluide, de 0 à 1.
+            'line-color': [
+              'case',
+              ['has', 'road_closure'], '#7f1d1d',
+              ['step', ['to-number', ['get', 'traffic_level'], 1],
+                '#d93025',
+                0.4, '#f29900',
+                0.75, '#1e8e3e',
+              ],
+            ],
+            'line-width': ['interpolate', ['linear'], ['zoom'], 9, 1.5, 11, 2, 15, 4, 18, 7],
+            // Route à double sens : chaque sens est décalé de son côté pour voir les deux.
+            // (MapLibre exige que l'interpolation sur le zoom soit au premier niveau de l'expression.)
+            'line-offset': [
+              'interpolate', ['linear'], ['zoom'],
+              9, ['case', ['==', ['get', 'traffic_road_coverage'], 'one_side'], 0.75, 0],
+              15, ['case', ['==', ['get', 'traffic_road_coverage'], 'one_side'], 2.5, 0],
+              18, ['case', ['==', ['get', 'traffic_road_coverage'], 'one_side'], 4, 0],
+            ],
+            'line-opacity': 0.85,
+          },
+        },
+        firstSymbolLayer,
+      )
+    }
 
-    const refresh = (force: boolean) => {
-      const zoom = map.getZoom()
-      if (zoom < TRAFFIC_MIN_ZOOM) {
-        if (map.getLayer(TRAFFIC_LAYER_ID)) map.setLayoutProperty(TRAFFIC_LAYER_ID, 'visibility', 'none')
-        setTrafficStatus('zoom')
-        return
-      }
-      if (map.getLayer(TRAFFIC_LAYER_ID)) map.setLayoutProperty(TRAFFIC_LAYER_ID, 'visibility', 'visible')
-
-      const view = map.getBounds()
-      const detailed = zoom >= 13
-      const stillCovered =
-        loaded &&
-        loaded.detailed === detailed &&
-        Date.now() - loaded.time < TRAFFIC_REFRESH_MS &&
-        view.getWest() >= loaded.west &&
-        view.getEast() <= loaded.east &&
-        view.getSouth() >= loaded.south &&
-        view.getNorth() <= loaded.north
-      if (!force && stillCovered) {
+    const updateZoomStatus = () => {
+      setTrafficStatus((current) => {
+        if (map.getZoom() < TRAFFIC_MIN_ZOOM) return 'zoom'
+        return current === 'zoom' || current === 'idle' ? 'loading' : current
+      })
+    }
+    const handleSourceData = (event: MapSourceDataEvent) => {
+      if (event.sourceId === TRAFFIC_SOURCE_ID && event.isSourceLoaded && map.getZoom() >= TRAFFIC_MIN_ZOOM) {
         setTrafficStatus('ready')
-        return
       }
-
-      // On charge 50 % de marge autour de l'écran pour absorber les déplacements.
-      const padLng = (view.getEast() - view.getWest()) * 0.5
-      const padLat = (view.getNorth() - view.getSouth()) * 0.5
-      const area = {
-        west: view.getWest() - padLng,
-        south: view.getSouth() - padLat,
-        east: view.getEast() + padLng,
-        north: view.getNorth() + padLat,
+    }
+    const handleError = (event: ErrorEvent & { sourceId?: string }) => {
+      if (event.sourceId === TRAFFIC_SOURCE_ID) setTrafficStatus('error')
+    }
+    // Toutes les 2 minutes, nouvelle URL de tuiles : MapLibre recharge les données de trafic.
+    const interval = window.setInterval(() => {
+      const source = map.getSource(TRAFFIC_SOURCE_ID)
+      if (source && 'setTiles' in source && typeof source.setTiles === 'function') {
+        source.setTiles([getTrafficTileUrl()])
       }
+    }, TRAFFIC_REFRESH_MS)
 
-      controller?.abort()
-      const request = new AbortController()
-      controller = request
-      setTrafficStatus((current) => (current === 'ready' ? current : 'loading'))
-      void getTrafficFlow(area, zoom, request.signal)
-        .then((data) => {
-          if (request.signal.aborted || mapRef.current !== map) return
-          loaded = { ...area, detailed, time: Date.now() }
-          const source = map.getSource(TRAFFIC_SOURCE_ID)
-          if (source && 'setData' in source && typeof source.setData === 'function') {
-            source.setData(data)
-          } else if (!source) {
-            map.addSource(TRAFFIC_SOURCE_ID, { type: 'geojson', data })
-          }
-          if (!map.getLayer(TRAFFIC_LAYER_ID)) {
-            const firstSymbolLayer = map.getStyle().layers?.find((layer) => layer.type === 'symbol')?.id
-            map.addLayer(
-              {
-                id: TRAFFIC_LAYER_ID,
-                type: 'line',
-                source: TRAFFIC_SOURCE_ID,
-                layout: { 'line-cap': 'round', 'line-join': 'round' },
-                paint: {
-                  // jamFactor HERE : 0 = fluide … 10 = route fermée.
-                  'line-color': [
-                    'step', ['get', 'jamFactor'],
-                    '#1e8e3e',
-                    4, '#f29900',
-                    8, '#d93025',
-                    10, '#7f1d1d',
-                  ],
-                  'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 15, 4, 18, 7],
-                  'line-opacity': 0.85,
-                },
-              },
-              firstSymbolLayer,
-            )
-          }
-          setTrafficStatus('ready')
-        })
-        .catch(() => {
-          if (!request.signal.aborted) setTrafficStatus('error')
-        })
-    }
-
-    const handleMoveEnd = () => {
-      window.clearTimeout(debounce)
-      debounce = window.setTimeout(() => refresh(false), 600)
-    }
-    map.on('moveend', handleMoveEnd)
-    const interval = window.setInterval(() => refresh(true), TRAFFIC_REFRESH_MS)
-    refresh(true)
+    map.on('zoomend', updateZoomStatus)
+    map.on('sourcedata', handleSourceData)
+    map.on('error', handleError)
+    updateZoomStatus()
 
     return () => {
-      map.off('moveend', handleMoveEnd)
-      window.clearTimeout(debounce)
+      map.off('zoomend', updateZoomStatus)
+      map.off('sourcedata', handleSourceData)
+      map.off('error', handleError)
       window.clearInterval(interval)
-      controller?.abort()
     }
   }, [trafficEnabled, status])
+
+  // Trafic sur le trajet : tuiles TomTom le long des 100 km à venir, rafraîchies toutes les 5 minutes.
+  useEffect(() => {
+    if (!trafficEnabled || !route) {
+      setRouteTraffic(null)
+      return
+    }
+    const controller = new AbortController()
+    void getRouteTraffic(route, routeTrafficFrom, controller.signal)
+      .then((traffic) => {
+        if (!controller.signal.aborted) setRouteTraffic(traffic)
+      })
+      .catch(() => {
+        // Trafic indisponible : on garde l'ancien état, le trajet reste bleu au pire.
+      })
+    const timer = window.setTimeout(() => setRouteTrafficTick((tick) => tick + 1), ROUTE_TRAFFIC_REFRESH_MS)
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+    }
+  }, [trafficEnabled, route, routeTrafficFrom, routeTrafficTick])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (status !== 'ready' || !map) return
+    if (!routeTrafficData) {
+      if (map.getLayer(ROUTE_TRAFFIC_LAYER_ID)) map.removeLayer(ROUTE_TRAFFIC_LAYER_ID)
+      if (map.getSource(ROUTE_TRAFFIC_SOURCE_ID)) map.removeSource(ROUTE_TRAFFIC_SOURCE_ID)
+      return
+    }
+    const source = map.getSource(ROUTE_TRAFFIC_SOURCE_ID)
+    if (source && 'setData' in source && typeof source.setData === 'function') source.setData(routeTrafficData)
+    else if (!source) map.addSource(ROUTE_TRAFFIC_SOURCE_ID, { type: 'geojson', data: routeTrafficData })
+
+    const firstSymbolLayer = map.getStyle().layers?.find((layer) => layer.type === 'symbol')?.id
+    if (!map.getLayer(ROUTE_TRAFFIC_LAYER_ID)) {
+      map.addLayer(
+        {
+          id: ROUTE_TRAFFIC_LAYER_ID,
+          type: 'line',
+          source: ROUTE_TRAFFIC_SOURCE_ID,
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': ['match', ['get', 'kind'], 'closed', '#7f1d1d', 'heavy', '#d93025', '#f29900'],
+            // Même épaisseur que la bande bleue du trajet sélectionné, qu'elle recouvre.
+            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 15, 8, 18, 16],
+          },
+        },
+        firstSymbolLayer,
+      )
+    }
+    // Toujours au-dessus de la bande bleue (qui peut être recréée après un changement de thème).
+    if (map.getLayer('osrm-route-line')) map.moveLayer(ROUTE_TRAFFIC_LAYER_ID, firstSymbolLayer)
+  }, [routeTrafficData, status, route])
 
   // Nouveau trajet : on repart de zéro.
   useEffect(() => {
@@ -1517,6 +1603,25 @@ export function MapCanvas() {
 
           {/* Boutons ronds à droite, au-dessus de la feuille du bas. */}
           <div className="nav-fabs">
+            {/* Trafic : le groupe de boutons de carte est masqué en conduite, on le propose ici. */}
+            <button
+              type="button"
+              className={`nav-fab nav-fab-traffic ${trafficEnabled ? 'is-active' : ''}`}
+              aria-pressed={trafficEnabled}
+              aria-label={trafficEnabled ? 'Masquer le trafic en temps réel' : 'Afficher le trafic en temps réel'}
+              title="Trafic en temps réel"
+              onClick={() => {
+                haptic('tap')
+                setTrafficEnabled((enabled) => !enabled)
+              }}
+            >
+              <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                <rect x="7" y="2" width="10" height="20" rx="3" fill="none" stroke="currentColor" strokeWidth="2" />
+                <circle cx="12" cy="7" r="1.8" fill="#d93025" />
+                <circle cx="12" cy="12" r="1.8" fill="#f29900" />
+                <circle cx="12" cy="17" r="1.8" fill="#1e8e3e" />
+              </svg>
+            </button>
             <AlongRouteSearch
               map={mapRef.current}
               mapReady={status === 'ready'}
@@ -1592,7 +1697,12 @@ export function MapCanvas() {
                   : 'Temps restant inconnu'
               }
             >
-              <strong>{remaining ? formatDuration(remaining.duration) : '—'}</strong>
+              <strong className={trafficDelayLevel ? `is-traffic-${trafficDelayLevel}` : undefined}>
+                {remaining ? formatDuration(remaining.duration) : '—'}
+                {trafficDelayLevel && (
+                  <small className="nav-traffic-delay">+{Math.round(trafficDelay / 60)} min</small>
+                )}
+              </strong>
               <span>
                 {remaining ? `${formatDistance(remaining.distance)} · ${formatArrivalTime(remaining.duration)}` : 'Calcul en cours'}
                 <Share2 size={13} aria-hidden="true" />

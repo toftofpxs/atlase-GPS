@@ -73,6 +73,19 @@ export function getPointAtDistance(coordinates: Point[], along: number): Point {
   return [start[0] + (end[0] - start[0]) * fraction, start[1] + (end[1] - start[1]) * fraction]
 }
 
+/** Portion du tracé entre deux distances depuis le départ (en mètres), pour la dessiner. */
+export function getRouteSlice(coordinates: Point[], from: number, to: number): Point[] {
+  const { cumulative } = getRouteGeometry(coordinates)
+  if (coordinates.length < 2 || to <= from) return []
+  const slice: Point[] = [getPointAtDistance(coordinates, from)]
+  const firstIndex = Math.min(coordinates.length - 1, findSegmentAt(cumulative, from) + 1)
+  for (let index = firstIndex; index < coordinates.length && cumulative[index] < to; index += 1) {
+    slice.push(coordinates[index])
+  }
+  slice.push(getPointAtDistance(coordinates, to))
+  return slice
+}
+
 export function getPointDistanceMeters(first: Point, second: Point): number {
   const latitudeRadians = (first[1] * Math.PI) / 180
   return Math.hypot(

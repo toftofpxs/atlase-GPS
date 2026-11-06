@@ -707,3 +707,7 @@ div.nav-sheet-summary { cursor: default; }
   .map-canvas.map-navigation-active .maplibregl-ctrl-bottom-right { right: 0; bottom: 0; }
 }
 .map-canvas.map-navigation-active .maplibregl-ctrl-bottom-left { display: none; }
+/* Temps restant coloré selon le retard dû au trafic. */
+.nav-sheet-summary strong.is-traffic-slow { color: #e37400; }
+.nav-sheet-summary strong.is-traffic-heavy { color: #d93025; }
+.nav-sheet-summary .nav-traffic-delay { margin-left: 8px; font-size: 15px; font-weight: 700; vertical-align: 0.35em; }
