@@ -5,7 +5,11 @@ import { Car, Footprints, LoaderCircle, MapPin, Move, RefreshCw, Trash2, X } fro
 import { reverseGeocode } from '../../services/geocoding'
 import { haptic } from '../../services/haptics'
 import { getCurrentLocation, getLocationErrorMessage } from '../../services/location'
-import { useInterfaceStore, type ParkedCar as ParkedCarData } from '../../stores/interfaceStore'
+import {
+  PARKED_CAR_DESTINATION_ID,
+  useInterfaceStore,
+  type ParkedCar as ParkedCarData,
+} from '../../stores/interfaceStore'
 
 interface ParkedCarProps {
   map: MapLibreMap | null
@@ -190,7 +194,7 @@ export function ParkedCar({ map, mapReady, drivingActive }: ParkedCarProps) {
       setRouteMode('walking')
       setOrigin(here)
       setDestination({
-        id: 'parked-car',
+        id: PARKED_CAR_DESTINATION_ID,
         name: 'Ma voiture',
         details: parkedCar.address ?? 'Emplacement enregistré',
         coordinates: parkedCar.coordinates,

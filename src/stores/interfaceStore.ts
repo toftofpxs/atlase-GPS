@@ -37,6 +37,8 @@ export interface RecentTrip {
 /** Nombre maximal de trajets récents gardés. */
 const MAX_RECENT_TRIPS = 12
 /** Identifiants des départs « position GPS » : ils ne sont pas mémorisés tels quels. */
+/** Destination créée par « Aller à ma voiture » (voir ParkedCar). */
+export const PARKED_CAR_DESTINATION_ID = 'parked-car'
 const CURRENT_POSITION_IDS = new Set(['browser-current-location', 'reroute-origin', 'current-position'])
 
 /** Clé d'un trajet : même départ, même destination, même mode = même trajet récent. */
@@ -245,6 +247,14 @@ export const useInterfaceStore = create<InterfaceState>()(persist((set, get) => 
   setDestination: (destination) =>
     set((state) => ({
       destination,
+      // « Aller à ma voiture » passe en mode piéton : pour la destination suivante, on repasse
+      // en voiture (sinon le trajet ignore les sens interdits, comme pour un piéton).
+      routeMode:
+        state.destination?.id === PARKED_CAR_DESTINATION_ID &&
+        destination?.id !== PARKED_CAR_DESTINATION_ID &&
+        state.routeMode === 'walking'
+          ? 'driving'
+          : state.routeMode,
       route: null,
       routeOptions: [],
       selectedRouteIndex: 0,
