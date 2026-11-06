@@ -9,6 +9,11 @@ export interface NavigationGuidance {
   distanceFromRoute: number
   /** Distance parcourue depuis le départ, en mètres. */
   along: number
+  /**
+   * Hors itinéraire, décidé au moment du point GPS avec la distance au tracé ET le sens de
+   * déplacement (voir RoutePanel). Absent : on se rabat sur la distance seule.
+   */
+  offRoute?: boolean
 }
 
 export interface RemainingRouteMetrics {
@@ -21,9 +26,31 @@ export type ManeuverDirection = 'straight' | 'left' | 'right' | 'uturn' | 'round
 /** Une manœuvre est considérée comme passée quand on est à moins de cette distance. */
 const MANEUVER_PASSED_METERS = 5
 
-/** Hors itinéraire : à plus de 75 m du tracé (ou plus si le GPS est imprécis). */
+/** Écart minimal au tracé pour être hors itinéraire (une rue parallèle est souvent à 40-60 m). */
+const OFF_ROUTE_MIN_METERS = 40
+/** Au-delà, la précision annoncée ne repousse plus le seuil (sinon on ne sortirait jamais en ville). */
+const OFF_ROUTE_ACCURACY_CAP_METERS = 60
+
+/** Distance au tracé au-delà de laquelle on est hors itinéraire, selon la précision GPS. */
+export function getOffRouteDistance(accuracy: number): number {
+  return Math.max(OFF_ROUTE_MIN_METERS, Math.min(accuracy, OFF_ROUTE_ACCURACY_CAP_METERS) * 1.5)
+}
+
 export function isOffRoute(guidance: NavigationGuidance | null, accuracy: number): boolean {
-  return Boolean(guidance && guidance.distanceFromRoute > Math.max(75, accuracy * 1.5))
+  if (!guidance) return false
+  if (guidance.offRoute !== undefined) return guidance.offRoute
+  return guidance.distanceFromRoute > getOffRouteDistance(accuracy)
+}
+
+/** Cap (degrés, 0 = nord) pour aller de `from` à `to`. */
+export function getBearingBetween(from: Point, to: Point): number {
+  return (calculateBearing(from, to) + 360) % 360
+}
+
+/** Écart d'angle (0 à 180°) entre deux caps. */
+export function getHeadingDifference(first: number, second: number): number {
+  const difference = Math.abs((((first - second) % 360) + 360) % 360)
+  return difference > 180 ? 360 - difference : difference
 }
 
 interface RouteTimeline {

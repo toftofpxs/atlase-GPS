@@ -35,14 +35,24 @@ export async function calculateRoute(
   waypoints: Destination[] = [],
   tollPreference: TollPreference = 'with-tolls',
   signal?: AbortSignal,
+  /**
+   * Sens de déplacement au départ (degrés, 0 = nord), pour un recalcul en roulant :
+   * l'itinéraire part alors dans le sens où l'on roule au lieu de proposer un demi-tour
+   * vers l'ancien trajet.
+   */
+  originHeading?: number | null,
 ): Promise<RouteSummary[]> {
   const isDriving = mode === 'driving'
   const response = await axios.get<ValhallaRouteResponse>(VALHALLA_API_URL, {
     params: {
       json: JSON.stringify({
-        locations: [origin, ...waypoints, destination].map((place) => ({
+        locations: [origin, ...waypoints, destination].map((place, index) => ({
           lat: place.coordinates[1],
           lon: place.coordinates[0],
+          ...(index === 0 && originHeading !== null && originHeading !== undefined && Number.isFinite(originHeading) && {
+            heading: Math.round(((originHeading % 360) + 360) % 360),
+            heading_tolerance: 60,
+          }),
         })),
         costing: isDriving ? 'auto' : mode === 'walking' ? 'pedestrian' : 'bicycle',
         ...(isDriving && {

@@ -40,7 +40,13 @@ import {
   X,
 } from 'lucide-react'
 import { getCurrentLocation, getLocationErrorMessage, watchCurrentLocation } from '../../services/location'
-import { getNavigationGuidance, isOffRoute } from '../../services/navigation'
+import {
+  getBearingBetween,
+  getHeadingDifference,
+  getNavigationGuidance,
+  getOffRouteDistance,
+  getRouteBearing,
+} from '../../services/navigation'
 import { unlockAlertSound } from '../../services/alertSound'
 import { haptic, hapticsSupported } from '../../services/haptics'
 import { getRouteProgress, getPointDistanceMeters, type Point } from '../../services/routeGeometry'
@@ -69,11 +75,22 @@ const SHEET_DRAG_THRESHOLD_PX = 36
 const SHEET_FLING_PX_PER_MS = 0.5
 
 /** Temps passé hors itinéraire avant de recalculer (évite de réagir à un écart GPS ponctuel). */
-const REROUTE_DELAY_MS = 8_000
+const REROUTE_DELAY_MS = 3_000
 /** Délai minimum entre deux recalculs. */
-const REROUTE_COOLDOWN_MS = 20_000
+const REROUTE_COOLDOWN_MS = 10_000
 /** Au-delà de cette imprécision, la position GPS n'est pas assez fiable pour recalculer. */
-const REROUTE_MAX_ACCURACY_METERS = 100
+const REROUTE_MAX_ACCURACY_METERS = 60
+/**
+ * Sortie détectée par le sens de déplacement : on roule (≥ 3 m/s ≈ 11 km/h) dans une direction
+ * qui s'écarte de plus de 60° de celle du trajet, à plus de 20 m du tracé, pendant 3 s.
+ * Ça repère une rue prise à côté bien avant d'en être à 40 m.
+ */
+const DIVERGE_MIN_SPEED_MS = 3
+const DIVERGE_MIN_ANGLE = 60
+const DIVERGE_MIN_DISTANCE_METERS = 20
+const DIVERGE_CONFIRM_MS = 3_000
+/** Distance parcourue avant de recalculer le sens de déplacement à partir des positions. */
+const HEADING_MIN_MOVE_METERS = 10
 /** Si on est déjà tout près de l'arrivée, inutile de recalculer. */
 const REROUTE_ARRIVAL_RADIUS_METERS = 100
 import {
@@ -305,9 +322,13 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
     /** Dernière progression mesurée alors qu'on était bien sur le trajet. */
     let lastOnRouteAlong = 0
     let offRouteSince: number | null = null
+    let divergingSince: number | null = null
     let rerouteRequest: AbortController | null = null
+    /** Dernier point servant à calculer le sens de déplacement quand le GPS ne le donne pas. */
+    let headingAnchor: Point | null = null
+    let movementHeading: number | null = null
 
-    const reroute = (from: Point) => {
+    const reroute = (from: Point, heading: number | null) => {
       const { destination: target, waypoints: stops, routeMode: mode, tollPreference: tolls } = rerouteParamsRef.current
       if (!target) return
       lastRerouteAtRef.current = Date.now()
@@ -319,7 +340,9 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       rerouteRequest = request
       setNavigationRerouting(true)
       const here = { id: 'reroute-origin', name: 'Ma position', details: 'Position GPS actuelle', coordinates: from }
-      void calculateRoute(here, target, mode, remainingStops, tolls, request.signal)
+      // Avec le sens de déplacement : le nouvel itinéraire continue dans la rue prise,
+      // au lieu de renvoyer vers l'ancien trajet par un demi-tour.
+      void calculateRoute(here, target, mode, remainingStops, tolls, request.signal, heading)
         .then(([newRoute]) => {
           if (request.signal.aborted) return
           if (newRoute) applyReroute(newRoute)
@@ -335,13 +358,42 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
       (position) => {
         // Calcul unique par position GPS : MapCanvas lit le résultat dans le store.
         const guidance = getNavigationGuidance(route, position.coordinates, stepIndex, lastAlong)
-        stepIndex = guidance.stepIndex
-        lastAlong = guidance.along
-        updateNavigationPosition(position, guidance)
+        const now = Date.now()
+
+        // Sens de déplacement : celui du GPS en roulant, sinon calculé entre deux positions espacées.
+        const moving = (position.speed ?? 0) >= DIVERGE_MIN_SPEED_MS
+        if (moving && position.heading !== null && Number.isFinite(position.heading) && position.heading >= 0) {
+          movementHeading = position.heading
+          headingAnchor = position.coordinates
+        } else if (!headingAnchor) {
+          headingAnchor = position.coordinates
+        } else if (getPointDistanceMeters(headingAnchor, position.coordinates) >= HEADING_MIN_MOVE_METERS) {
+          movementHeading = getBearingBetween(headingAnchor, position.coordinates)
+          headingAnchor = position.coordinates
+        }
+
+        // Hors itinéraire : trop loin du tracé, ou on part franchement dans une autre direction.
+        const routeBearing = getRouteBearing(route, guidance.along)
+        const diverging =
+          moving &&
+          movementHeading !== null &&
+          routeBearing !== null &&
+          getHeadingDifference(movementHeading, routeBearing) > DIVERGE_MIN_ANGLE &&
+          guidance.distanceFromRoute > Math.max(DIVERGE_MIN_DISTANCE_METERS, Math.min(position.accuracy, 40))
+        divergingSince = diverging ? divergingSince ?? now : null
+        const offRoute =
+          guidance.distanceFromRoute > getOffRouteDistance(position.accuracy) ||
+          (divergingSince !== null && now - divergingSince >= DIVERGE_CONFIRM_MS)
+
+        // Hors trajet, on ne fait pas avancer les étapes (la projection peut sauter sur une autre partie du tracé).
+        if (!offRoute) {
+          stepIndex = guidance.stepIndex
+          lastAlong = guidance.along
+        }
+        updateNavigationPosition(position, { ...guidance, offRoute })
 
         // Recalcul automatique après REROUTE_DELAY_MS hors itinéraire.
-        const now = Date.now()
-        if (!isOffRoute(guidance, position.accuracy)) {
+        if (!offRoute) {
           offRouteSince = null
           lastOnRouteAlong = guidance.along
           return
@@ -356,7 +408,7 @@ export function RoutePanel({ section, settingsOpen }: RoutePanelProps) {
           target &&
           getPointDistanceMeters(position.coordinates, target.coordinates) > REROUTE_ARRIVAL_RADIUS_METERS
         ) {
-          reroute(position.coordinates)
+          reroute(position.coordinates, movementHeading)
         }
         // Une fois la requête terminée (succès ou échec), on peut en relancer une plus tard.
         if (rerouteRequest && now - lastRerouteAtRef.current >= REROUTE_COOLDOWN_MS) rerouteRequest = null
