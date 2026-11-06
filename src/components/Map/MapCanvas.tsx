@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   ErrorEvent,
   Map as MapLibreMap,
@@ -57,8 +57,6 @@ import { LaneGuidance } from './LaneGuidance'
 const THEN_MAX_GAP_METERS = 150
 /** … et qu'on approche de la prochaine. */
 const THEN_SHOW_WITHIN_METERS = 600
-/** En navigation, la légende feux/STOP ne s'affiche qu'à moins de cette distance. */
-const CONTROLS_LEGEND_NEAR_METERS = 600
 /** Recentrage automatique sur la position après ce délai sans toucher la carte. */
 const AUTO_RECENTER_MS = 8_000
 /** Vibrations d'approche d'une manœuvre. */
@@ -164,16 +162,21 @@ export function MapCanvas() {
   const [reportMenuOpen, setReportMenuOpen] = useState(false)
   /** Feuille de navigation dépliée (trajets disponibles, prochaines étapes, raccourcis). */
   const [navSheetExpanded, setNavSheetExpanded] = useState(false)
-  const navSheetPointerY = useRef<number | null>(null)
+  /** Contenu déplié monté (il reste monté pendant l'animation de fermeture). */
+  const [navDetailsMounted, setNavDetailsMounted] = useState(false)
+  const navDetailsWrapRef = useRef<HTMLDivElement | null>(null)
+  const navSheetExpandedRef = useRef(navSheetExpanded)
+  navSheetExpandedRef.current = navSheetExpanded
+  /** Geste en cours sur la barre : la feuille suit le doigt. */
+  const navSheetDrag = useRef<{ startY: number; startHeight: number; dragging: boolean } | null>(null)
+  /** Après un glissement, le « clic » qui suit le relâchement ne doit pas replier/déplier à nouveau. */
+  const ignoreNavSheetClick = useRef(false)
   const [reportError, setReportError] = useState('')
   const [routeSpeedLimits, setRouteSpeedLimits] = useState<SpeedLimitSpan[] | null>(null)
   const [speedLimitsStatus, setSpeedLimitsStatus] = useState<SpeedLimitStatus>('idle')
   const [laneGuides, setLaneGuides] = useState<LaneGuide[]>([])
   const lastOverspeedBeepRef = useRef(0)
   const [routeControls, setRouteControls] = useState<RouteControl[]>([])
-  const [routeControlsStatus, setRouteControlsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-  const [routeControlsRetry, setRouteControlsRetry] = useState(0)
-  const [routeControlsPartial, setRouteControlsPartial] = useState<null | 'stops' | 'lights'>(null)
   const origin = useInterfaceStore((state) => state.origin)
   const waypoints = useInterfaceStore((state) => state.waypoints)
   const destination = useInterfaceStore((state) => state.destination)
@@ -287,12 +290,6 @@ export function MapCanvas() {
   const upcomingControls = useMemo(
     () => getUpcomingControls(routeControls, routeProgress),
     [routeControls, routeProgress],
-  )
-  const nextLight = upcomingControls.find((control) => control.type === 'traffic-light')
-  const nextStop = upcomingControls.find((control) => control.type === 'stop')
-  // Écran épuré en navigation : la légende feux/STOP n'apparaît qu'à leur approche.
-  const controlsNearby = [nextLight, nextStop].some(
-    (control) => control && control.distanceAlongRoute - routeProgress <= CONTROLS_LEGEND_NEAR_METERS,
   )
 
   useEffect(() => {
@@ -731,29 +728,35 @@ export function MapCanvas() {
   }, [drivingActive, trafficEnabled, status])
 
   useEffect(() => {
-    if (!navigationActive) setNavSheetExpanded(false)
+    if (navigationActive) return
+    setNavSheetExpanded(false)
+    setNavDetailsMounted(false)
   }, [navigationActive])
+
+  useLayoutEffect(() => {
+    if (navSheetExpanded && !navDetailsMounted) {
+      setNavDetailsMounted(true)
+      return
+    }
+    if (navSheetDrag.current?.dragging) return
+    const frame = window.requestAnimationFrame(() => animateNavSheet(navSheetExpanded))
+    return () => window.cancelAnimationFrame(frame)
+  }, [navSheetExpanded, navDetailsMounted])
 
   // Nouveau trajet : on repart de zéro.
   useEffect(() => {
     setRouteControls([])
-    setRouteControlsPartial(null)
   }, [route])
 
   // Recherche sur les ~3 km devant l'utilisateur, relancée seulement tous les 1 km parcourus.
   useEffect(() => {
     if (status !== 'ready' || !route) {
-      setRouteControlsStatus('idle')
       return
     }
 
     const controller = new AbortController()
-    let timedOut = false
-    setRouteControlsStatus('loading')
-    const timeout = window.setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, 40_000)
+    // Au-delà de 40 s, on abandonne : les repères déjà affichés restent.
+    const timeout = window.setTimeout(() => controller.abort(), 40_000)
     // Tant que la nouvelle réponse n'est pas complète, on garde les éléments déjà connus de l'autre type.
     const keepPrevious = (type: RouteControl['type'], fresh: RouteControl[]) =>
       setRouteControls((previous) => [...fresh, ...previous.filter((control) => control.type === type)])
@@ -763,11 +766,9 @@ export function MapCanvas() {
         if (!result.stopsAvailable) keepPrevious('stop', result.controls)
         else if (!result.lightsAvailable) keepPrevious('traffic-light', result.controls)
         else setRouteControls(result.controls)
-        setRouteControlsPartial(!result.stopsAvailable ? 'stops' : !result.lightsAvailable ? 'lights' : null)
-        setRouteControlsStatus('ready')
       })
       .catch(() => {
-        if (timedOut || !controller.signal.aborted) setRouteControlsStatus('error')
+        // Recherche indisponible (réseau…) : on réessaiera au prochain kilomètre.
       })
       .finally(() => window.clearTimeout(timeout))
 
@@ -775,7 +776,7 @@ export function MapCanvas() {
       window.clearTimeout(timeout)
       controller.abort()
     }
-  }, [route, controlsFetchFrom, routeControlsRetry, status])
+  }, [route, controlsFetchFrom, status])
 
   // Affiche seulement les prochains feux et STOP ; les repères sont ajoutés/retirés un par un.
   useEffect(() => {
@@ -820,7 +821,7 @@ export function MapCanvas() {
         routeControlMarkerRefs.current.set(control.id, marker)
       }
     }).catch(() => {
-      if (!disposed) setRouteControlsStatus('error')
+      // Bibliothèque de carte indisponible : pas de repères feux/STOP.
     })
 
     return () => {
@@ -1162,6 +1163,24 @@ export function MapCanvas() {
 
   // Aperçu : tout le trajet restant à l'écran, carte à plat et nord en haut.
   // Le recentrage automatique ramène ensuite la vue sur la voiture.
+  /** Hauteur de la feuille dépliée (le contenu défile au-delà). */
+  const getNavSheetExpandedHeight = () => Math.min(window.innerHeight * 0.58, 560)
+
+  const animateNavSheet = (expanded: boolean) => {
+    const wrap = navDetailsWrapRef.current
+    if (!wrap) return
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    wrap.style.transition = reduceMotion ? 'none' : 'height 340ms cubic-bezier(.2, .8, .2, 1)'
+    wrap.style.height = `${expanded ? getNavSheetExpandedHeight() : 0}px`
+    if (reduceMotion && !expanded) setNavDetailsMounted(false)
+  }
+
+  const toggleNavSheet = () => {
+    if (ignoreNavSheetClick.current) return
+    haptic('tap')
+    setNavSheetExpanded((expanded) => !expanded)
+  }
+
   const showRouteOverview = () => {
     const map = mapRef.current
     if (!map || !route) return
@@ -1543,56 +1562,6 @@ export function MapCanvas() {
     return () => window.cancelAnimationFrame(drawFrame)
   }, [isDarkMapStyle, mapViewportMobile, route, routeOptions, selectedRouteIndex, status])
 
-  // Légende feux/STOP : sous le bandeau en navigation, dans un coin de la carte sinon.
-  const controlsLegend = route && routeControlsStatus !== 'idle' && (!navigationActive || controlsNearby) ? (
-    <div className="route-controls-legend" role="status" aria-live="polite">
-      {routeControlsStatus === 'loading' && upcomingControls.length === 0 ? (
-        <><LoaderCircle size={14} className="route-button-spinner" /> Recherche des feux et STOP à proximité…</>
-      ) : routeControlsStatus === 'error' && upcomingControls.length === 0 ? (
-        <>
-          <span>Panneaux et feux indisponibles</span>
-          <button
-            type="button"
-            className="route-controls-retry"
-            onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
-          >
-            Réessayer
-          </button>
-        </>
-      ) : upcomingControls.length === 0 && !routeControlsPartial ? (
-        'Aucun feu ni STOP à proximité'
-      ) : (
-        <>
-          {nextLight && (
-            <span>
-              <i className="route-controls-light-key" aria-hidden="true"><span /><span /><span /></i>
-              Feu dans {formatDistance(Math.max(0, nextLight.distanceAlongRoute - routeProgress))}
-            </span>
-          )}
-          {nextStop && (
-            <span>
-              <i className="route-controls-stop-key">STOP</i>
-              STOP dans {formatDistance(Math.max(0, nextStop.distanceAlongRoute - routeProgress))}
-            </span>
-          )}
-          {routeControlsPartial && (
-            <span className="route-controls-partial">
-              {routeControlsPartial === 'stops' ? 'STOP indisponibles' : 'Feux indisponibles'}
-              <button
-                type="button"
-                className="route-controls-retry"
-                onClick={() => setRouteControlsRetry((attempt) => attempt + 1)}
-              >
-                Réessayer
-              </button>
-            </span>
-          )}
-          <small>Données OpenStreetMap, non exhaustives</small>
-        </>
-      )}
-    </div>
-  ) : null
-
   return (
     <section
       className={`map-canvas ${drivingActive ? 'map-navigation-active' : ''} ${upcomingLanes ? 'has-lanes' : ''}`}
@@ -1606,7 +1575,6 @@ export function MapCanvas() {
           {trafficStatus === 'error' && 'Trafic indisponible'}
         </div>
       )}
-      {!navigationActive && controlsLegend}
       {navigationActive && route && (
         <>
           {/* Bandeau de guidage : flèche + distance, rue à prendre, puis les voies dans le même bloc. */}
@@ -1653,7 +1621,6 @@ export function MapCanvas() {
                   <ThenIcon size={20} strokeWidth={2.8} aria-hidden="true" />
                 </div>
               )}
-              {controlsLegend}
             </div>
           </div>
 
@@ -1748,41 +1715,63 @@ export function MapCanvas() {
             <div
               className="nav-sheet-bar"
               onPointerDown={(event) => {
-                navSheetPointerY.current = event.clientY
+                navSheetDrag.current = {
+                  startY: event.clientY,
+                  startHeight: navDetailsWrapRef.current?.offsetHeight ?? 0,
+                  dragging: false,
+                }
                 // Le geste reste suivi par la barre même quand le doigt la quitte en glissant.
                 event.currentTarget.setPointerCapture(event.pointerId)
               }}
+              onPointerMove={(event) => {
+                const drag = navSheetDrag.current
+                if (!drag) return
+                const deltaY = event.clientY - drag.startY
+                if (!drag.dragging) {
+                  if (Math.abs(deltaY) < 6) return
+                  drag.dragging = true
+                  setNavDetailsMounted(true)
+                }
+                // La feuille suit le doigt (sans animation pendant le geste).
+                const wrap = navDetailsWrapRef.current
+                if (!wrap) return
+                const height = Math.max(0, Math.min(getNavSheetExpandedHeight(), drag.startHeight - deltaY))
+                wrap.style.transition = 'none'
+                wrap.style.height = `${height}px`
+              }}
               onPointerCancel={() => {
-                navSheetPointerY.current = null
+                const drag = navSheetDrag.current
+                navSheetDrag.current = null
+                if (drag?.dragging) animateNavSheet(navSheetExpandedRef.current)
               }}
               onPointerUp={(event) => {
-                const startY = navSheetPointerY.current
-                navSheetPointerY.current = null
-                if (startY === null) return
-                const deltaY = event.clientY - startY
-                if (deltaY < -30 && !navSheetExpanded) {
-                  haptic('tap')
-                  setNavSheetExpanded(true)
-                } else if (deltaY > 30 && navSheetExpanded) {
-                  haptic('tap')
-                  setNavSheetExpanded(false)
-                }
+                const drag = navSheetDrag.current
+                navSheetDrag.current = null
+                if (!drag?.dragging) return
+                // Fin du geste : on termine vers l'état visé (sens du geste, sinon la moitié la plus proche).
+                const deltaY = event.clientY - drag.startY
+                const height = navDetailsWrapRef.current?.offsetHeight ?? 0
+                const expand = deltaY < -40 ? true : deltaY > 40 ? false : height > getNavSheetExpandedHeight() / 2
+                ignoreNavSheetClick.current = true
+                window.setTimeout(() => {
+                  ignoreNavSheetClick.current = false
+                }, 0)
+                if (expand !== navSheetExpandedRef.current) haptic('tap')
+                animateNavSheet(expand)
+                setNavSheetExpanded(expand)
               }}
             >
             <button
               type="button"
               className="nav-sheet-grip"
-              onClick={() => setNavSheetExpanded((expanded) => !expanded)}
+              onClick={toggleNavSheet}
               aria-label={navSheetExpanded ? 'Replier' : 'Plus d’options : trajets, étapes'}
               aria-expanded={navSheetExpanded}
             />
             <button
               type="button"
               className="nav-sheet-summary"
-              onClick={() => {
-                haptic('tap')
-                setNavSheetExpanded((expanded) => !expanded)
-              }}
+              onClick={toggleNavSheet}
               aria-expanded={navSheetExpanded}
               aria-label={
                 remaining
@@ -1822,7 +1811,15 @@ export function MapCanvas() {
               Quitter
             </button>
             </div>
-            {navSheetExpanded && route && remaining && (
+            {navDetailsMounted && route && remaining && (
+              <div
+                className="nav-details-wrap"
+                ref={navDetailsWrapRef}
+                onTransitionEnd={(event) => {
+                  // Fermeture terminée : on retire le contenu (il sera recréé à la prochaine ouverture).
+                  if (event.target === event.currentTarget && !navSheetExpandedRef.current) setNavDetailsMounted(false)
+                }}
+              >
               <NavigationSheetDetails
                 route={route}
                 along={routeProgress}
@@ -1845,6 +1842,7 @@ export function MapCanvas() {
                 }}
                 onRouteChanged={() => setNavSheetExpanded(false)}
               />
+              </div>
             )}
           </section>
           {stopConfirmOpen && (
